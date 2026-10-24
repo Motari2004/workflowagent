@@ -1,123 +1,62 @@
 import os, shutil
 
 SERVER = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\server.py'
-
 if not os.path.exists(SERVER):
     print("Not found"); exit(1)
 
-shutil.copy(SERVER, SERVER + '.backup_jsdata')
+shutil.copy(SERVER, SERVER + '.backup_knownapis')
 print("Backed up\n")
 
 with open(SERVER, 'r', encoding='utf-8') as f:
     code = f.read()
 
-# The EXACT old template block as it appears in your server.py
-old_template = '''    template = r"""
-const fs = require('fs');
-const _input = fs.readFileSync(process.argv[2], 'utf-8');
-let _output = _input;
-function output(val) { _output = typeof val === 'string' ? val : JSON.stringify(val); }
-const input = _input;
-(async () => {
-    try {
-""" + user_code + r"""
-        process.stdout.write(String(_output));
-    } catch (err) {
-        process.stderr.write("ERROR: " + (err && err.stack ? err.stack : String(err)));
-        process.exit(1);
-    }
-})();
-"""'''
+# Insert known APIs + deprecation warnings before "### TOOLS"
+marker = '        "### TOOLS\\n"'
 
-new_template = '''    template = r"""
-const fs = require('fs');
-const _input = fs.readFileSync(process.argv[2], 'utf-8');
-let _output = _input;
-function output(val) { _output = typeof val === 'string' ? val : JSON.stringify(val); }
+injection = '''        "### KNOWN-WORKING APIs (use these, not deprecated ones)\\n"
+        "  Bitcoin price:  https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT\\n"
+        "                  → returns {\\\"symbol\\\":\\\"BTCUSDT\\\",\\\"price\\\":\\\"97500.00\\\"}\\n"
+        "                  → in JS: parseFloat(data.price)\\n"
+        "  Crypto prices:  https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd\\n"
+        "                  → returns {\\\"bitcoin\\\":{\\\"usd\\\":97500}}\\n"
+        "                  → in JS: data.bitcoin.usd\\n"
+        "  Remote jobs:    https://remotive.com/api/remote-jobs\\n"
+        "                  → returns {\\\"jobs\\\":[...]}\\n"
+        "                  → in JS: data.jobs\\n"
+        "  Weather:        https://wttr.in/CITY?format=j1\\n"
+        "                  → in JS: data.current_condition[0].temp_C\\n"
+        "  GitHub issues:  https://api.github.com/repos/OWNER/REPO/issues?state=open&per_page=5\\n"
+        "                  → returns an ARRAY → in JS: Array.isArray(data) ? data : []\\n"
+        "  RSS example:    https://news.ycombinator.com/rss\\n"
+        "                  → returns XML → data will be NULL, use input with RegExp\\n\\n"
 
-// Auto-parse `input` into `data` so JS Code nodes can use either style.
-let _jsonText = _input;
-if (typeof _jsonText === 'string' && _jsonText.startsWith('HTTP ')) {
-    const _ci = _jsonText.indexOf(':');
-    if (_ci > 0) _jsonText = _jsonText.slice(_ci + 1).trim();
-}
-let data = null;
-try {
-    data = JSON.parse(_jsonText);
-    if (data && typeof data.response === 'string') {
-        try { data = JSON.parse(data.response); } catch (_) {}
-    }
-} catch (_) { data = null; }
+        "DEPRECATED — do NOT use these under any circumstances:\\n"
+        "  ❌ api.coindesk.com           (shut down late 2024 — DNS no longer resolves)\\n"
+        "  ❌ remotive.io                (migrated to remotive.com in 2022)\\n"
+        "  ❌ api.cryptocompare.com      (requires paid key now)\\n"
+        "  ❌ any URL containing 'coindesk' or 'cryptocompare' — DO NOT emit them\\n\\n"
 
-const input = _input;
-(async () => {
-    try {
-""" + user_code + r"""
-        process.stdout.write(String(_output));
-    } catch (err) {
-        process.stderr.write("ERROR: " + (err && err.stack ? err.stack : String(err)));
-        process.exit(1);
-    }
-})();
-"""'''
+        "### TOOLS\\n"'''
 
-if old_template in code:
-    code = code.replace(old_template, new_template, 1)
-    print("[1] Replaced template — `data` is now auto-parsed")
-elif 'let data = null;' in code and 'JSON.parse(_jsonText)' in code:
-    print("[1] Already patched — no change")
-else:
-    print("[1] FAIL — could not find exact template block")
-    print("    The block may have been modified. Trying regex fallback...")
-
-    import re
-    pattern = re.compile(
-        r"    template = r\"\"\"\s*\n"
-        r"const fs = require\('fs'\);.*?"
-        r"const input = _input;",
-        re.DOTALL
-    )
-    match = pattern.search(code)
-    if match:
-        code = code[:match.start()] + new_template.split('""" + user_code')[0] + '"""' + code[match.end() - len('const input = _input;'):]
-        print("[1] Regex fallback applied")
+if 'KNOWN-WORKING APIs' not in code:
+    if marker in code:
+        code = code.replace(marker, injection, 1)
+        print("[1] Inserted known-working APIs section")
     else:
-        print("[1] Regex also failed — aborting")
-        print("    Search server.py for: template = r\"\"\"")
+        print("[1] FAIL — could not find ### TOOLS marker")
         exit(1)
+else:
+    print("[1] Already patched")
 
 with open(SERVER, 'w', encoding='utf-8') as f:
     f.write(code)
 
 try:
     compile(open(SERVER, 'r', encoding='utf-8').read(), SERVER, 'exec')
-    print("\nCompiles OK")
+    print("Compiles OK")
 except SyntaxError as e:
-    shutil.copy(SERVER + '.backup_jsdata', SERVER)
+    shutil.copy(SERVER + '.backup_knownapis', SERVER)
     print(f"Syntax error line {e.lineno}: {e.msg} — restored")
     exit(1)
 
-# Verify
-final = open(SERVER, 'r', encoding='utf-8').read()
-checks = [
-    ("data auto-parsed",       "let data = null;" in final),
-    ("HTTP prefix handling",   "_jsonText.startsWith('HTTP ')" in final),
-    ("response re-parsed",     "JSON.parse(data.response)" in final),
-    ("input still available",  "const input = _input;" in final),
-    ("output() function",      "function output(val)" in final),
-]
-print("\nVERIFICATION:")
-all_ok = True
-for name, ok in checks:
-    print(f"  [{'OK  ' if ok else 'FAIL'}] {name}")
-    if not ok:
-        all_ok = False
-
-print()
-if all_ok:
-    print("PATCH COMPLETE")
-    print()
-    print("Next:")
-    print("  git add server.py")
-    print("  git commit -m 'Auto-parse data in JS wrapper'")
-    print("  git push origin main")
+print("\nPATCH COMPLETE")
