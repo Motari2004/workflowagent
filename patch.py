@@ -5,37 +5,32 @@ SERVER = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\server.py'
 if not os.path.exists(SERVER):
     print("Not found:", SERVER); exit(1)
 
-shutil.copy(SERVER, SERVER + '.backup_db')
-print("Backed up\n")
+shutil.copy(SERVER, SERVER + '.backup_direct')
+print("Backed up to server.py.backup_direct\n")
 
 with open(SERVER, 'r', encoding='utf-8') as f:
     code = f.read()
 
-print("File:", len(code), "chars\n")
+print(f"File: {len(code)} chars\n")
 changes = 0
 
 # ═══════════════════════════════════════════════════════════════
-# 1. Replace the whole import + pool block with a robust version
-#    (drops psycopg_pool requirement, uses direct connections)
+# 1. Remove psycopg_pool from imports (keep psycopg only)
 # ═══════════════════════════════════════════════════════════════
-print("[1] Replacing imports + DB init block...")
+print("[1] Fixing imports — drop psycopg_pool...")
 
-old_import_block = re.compile(
-    r"try:\s*\n"
-    r"\s*import psycopg\s*\n"
-    r".*?"
-    r"_HAS_PSYCOPG = False\s*\n"
-    r"(?:[^\n]*\n)*?"
-    r"_pool = None\s*\n"
-    r".*?"
-    r"USE_DB = False\s*\n",
-    re.DOTALL
-)
+old_imports = '''try:
+    import psycopg
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+    _HAS_PSYCOPG = True
+except ImportError:
+    psycopg = None
+    dict_row = None
+    ConnectionPool = None
+    _HAS_PSYCOPG = False'''
 
-new_import_block = '''# ============================================================
-# NEON POSTGRES — direct connections (no psycopg_pool dependency)
-# ============================================================
-try:
+new_imports = '''try:
     import psycopg
     from psycopg.rows import dict_row
     _HAS_PSYCOPG = True
@@ -43,48 +38,62 @@ except ImportError as _ie:
     psycopg = None
     dict_row = None
     _HAS_PSYCOPG = False
-    print(f"[db] psycopg import failed: {_ie}")
+    print(f"[db] psycopg import failed: {_ie}")'''
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+if old_imports in code:
+    code = code.replace(old_imports, new_imports, 1)
+    changes += 1
+    print("  OK - imports fixed")
+else:
+    print("  SKIP - imports already correct or different")
 
-print(f"[db] DATABASE_URL present: {bool(DATABASE_URL)} (len={len(DATABASE_URL)})")
-print(f"[db] psycopg available: {_HAS_PSYCOPG}")
+# ═══════════════════════════════════════════════════════════════
+# 2. Replace pool init with direct connection test
+# ═══════════════════════════════════════════════════════════════
+print("\n[2] Replacing pool init with direct connect...")
 
-USE_DB = bool(DATABASE_URL) and _HAS_PSYCOPG
+old_pool = '''_pool = None
+if USE_DB:
+    try:
+        _pool = ConnectionPool(
+            conninfo=DATABASE_URL,
+            min_size=1,
+            max_size=4,
+            timeout=10,
+            kwargs={"autocommit": True, "row_factory": dict_row},
+        )
+        print("[db] Neon Postgres pool ready")
+    except Exception as _e:
+        print(f"[db] Pool init failed: {_e} — falling back to local files")
+        _pool = None
+        USE_DB = False'''
 
-# Quick connection test so boot logs are honest
+new_pool = '''_pool = None
 if USE_DB:
     try:
         _test = psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True, connect_timeout=10)
         _test.close()
-        print("[db] Neon connection OK")
+        print("[db] Neon connection OK (direct connect)")
     except Exception as _e:
-        print(f"[db] Connection failed: {_e}")
-        USE_DB = False
+        print(f"[db] Connection failed: {_e} — falling back to filesystem")
+        USE_DB = False'''
 
-'''
-
-# Match the "try: import psycopg ... USE_DB = False" region
-match = re.search(
-    r"try:\s*\n\s*import psycopg[\s\S]*?USE_DB = False\n",
-    code
-)
-if match:
-    old_block = match.group(0)
-    code = code.replace(old_block, new_import_block, 1)
+if old_pool in code:
+    code = code.replace(old_pool, new_pool, 1)
     changes += 1
-    print("  OK - import + DB init replaced")
+    print("  OK - pool init replaced")
 else:
-    print("  FAIL - could not locate psycopg import block")
+    print("  SKIP - pool init already replaced or different")
 
 # ═══════════════════════════════════════════════════════════════
-# 2. Replace _db_init_schema, _db_exec, _db_one, _db_all
-#    with direct-connection versions
+# 3. Replace _db_init_schema, _db_exec, _db_one, _db_all
+#    (all four currently use _pool.connection())
 # ═══════════════════════════════════════════════════════════════
-print("\n[2] Replacing DB helper functions...")
+print("\n[3] Replacing DB helper functions...")
 
-old_helpers = re.compile(
-    r"def _db_init_schema\(\):[\s\S]*?(?=\n# ---------- Workflow storage|def save_workflow)",
+# Match all four together from def _db_init_schema to end of _db_all
+pattern = re.compile(
+    r"def _db_init_schema\(\):.*?(?=\ndef memory_save_message)",
     re.DOTALL
 )
 
@@ -96,27 +105,27 @@ new_helpers = '''def _db_init_schema():
             with conn.cursor() as cur:
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS workflows (
-                        name TEXT PRIMARY KEY,
-                        payload JSONB NOT NULL,
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        name        TEXT PRIMARY KEY,
+                        payload     JSONB NOT NULL,
+                        updated_at  TIMESTAMPTZ DEFAULT NOW()
                     );
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS credentials (
-                        service TEXT PRIMARY KEY,
-                        payload JSONB NOT NULL,
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        service     TEXT PRIMARY KEY,
+                        payload     JSONB NOT NULL,
+                        updated_at  TIMESTAMPTZ DEFAULT NOW()
                     );
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS execution_logs (
-                        id BIGSERIAL PRIMARY KEY,
-                        workflow TEXT NOT NULL,
-                        source TEXT NOT NULL,
-                        status TEXT,
-                        result TEXT,
-                        logs JSONB,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        id          BIGSERIAL PRIMARY KEY,
+                        workflow    TEXT NOT NULL,
+                        source      TEXT NOT NULL,
+                        status      TEXT,
+                        result      JSONB,
+                        logs        JSONB,
+                        created_at  TIMESTAMPTZ DEFAULT NOW()
                     );
                 """)
                 cur.execute("""
@@ -125,11 +134,11 @@ new_helpers = '''def _db_init_schema():
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS memory_messages (
-                        id BIGSERIAL PRIMARY KEY,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        role TEXT NOT NULL,
-                        text TEXT NOT NULL,
-                        session_id TEXT
+                        id          BIGSERIAL PRIMARY KEY,
+                        created_at  TIMESTAMPTZ DEFAULT NOW(),
+                        role        TEXT NOT NULL,
+                        text        TEXT NOT NULL,
+                        session_id  TEXT
                     );
                 """)
                 cur.execute("""
@@ -138,14 +147,14 @@ new_helpers = '''def _db_init_schema():
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS memory_facts (
-                        key TEXT PRIMARY KEY,
-                        value JSONB,
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        key         TEXT PRIMARY KEY,
+                        value       JSONB,
+                        updated_at  TIMESTAMPTZ DEFAULT NOW()
                     );
                 """)
-        print("[db] Schema ready")
+        print("[db] schema ensured")
     except Exception as e:
-        print(f"[db] Schema init failed: {e}")
+        print(f"[db] schema init failed: {e}")
 
 
 def _db_exec(query, params=None):
@@ -187,77 +196,42 @@ def _db_all(query, params=None):
         return []
 
 '''
-
-if old_helpers.search(code):
-    code = old_helpers.sub(new_helpers, code, count=1)
+if pattern.search(code):
+    code = pattern.sub(new_helpers, code, count=1)
     changes += 1
     print("  OK - helper functions replaced")
 else:
-    print("  FAIL - helpers not matched (already updated?)")
+    print("  FAIL - could not match helper block")
 
 # ═══════════════════════════════════════════════════════════════
-# 3. Remove the old _db_init_schema() call at module scope if present
-#    (it's included inside new helpers block now)
+# 4. Remove the standalone "_db_init_schema()" call at module
+#    scope (it's inside the new block now), then re-add ONE call
+#    right after the new _db_all function.
 # ═══════════════════════════════════════════════════════════════
-print("\n[3] Ensuring schema init is called once...")
+print("\n[4] Ensuring schema init is called exactly once...")
 
-# Remove any standalone _db_init_schema() call that isn't the definition
-# We'll re-add it right after the helpers block
+# Strip any standalone top-level call
 code = re.sub(r'^_db_init_schema\(\)\s*$', '', code, flags=re.MULTILINE)
 
-# Insert one call right after the new helpers block
-if "_db_init_schema()" not in code.split("def _db_exec")[0]:
-    # find end of _db_all function and insert call
-    anchor = "def _db_all(query, params=None):"
+# Insert one call after _db_all definition
+anchor = "\ndef _db_all(query, params=None):"
+if anchor in code:
+    # find end of _db_all function
     idx = code.find(anchor)
-    if idx != -1:
-        # find the end of that function (next "def " at col 0)
-        end_idx = code.find("\ndef ", idx + 10)
-        if end_idx == -1:
-            end_idx = len(code)
-        code = code[:end_idx] + "\n\n_db_init_schema()\n" + code[end_idx:]
+    end = code.find("\ndef ", idx + 10)
+    if end == -1:
+        end = code.find("\n\n\n", idx)
+    if end != -1:
+        code = code[:end] + "\n\n_db_init_schema()\n" + code[end:]
         changes += 1
-        print("  OK - db init call inserted")
-else:
-    print("  SKIP - init call already present")
-
-# ═══════════════════════════════════════════════════════════════
-# 4. Update save/load workflow to match table column `payload`
-# ═══════════════════════════════════════════════════════════════
-print("\n[4] Verifying workflow storage functions...")
-
-# Only patch if old column name 'data' is still used
-old_save = '''    if USE_DB:
-        _db_exec(
-            """INSERT INTO workflows (name, payload, updated_at)
-               VALUES (%s, %s::jsonb, NOW())
-               ON CONFLICT (name) DO UPDATE SET
-                 payload = EXCLUDED.payload,
-                 updated_at = NOW()""",
-            (name, json.dumps(wf))
-        )
-        return'''
-
-if 'INSERT INTO workflows (name, payload' not in code:
-    old_save_v1 = '''    if USE_DB:
-        _db_exec(
-            """INSERT INTO workflows (name, data, updated_at)
-               VALUES (%s, %s::jsonb, NOW())
-               ON CONFLICT (name) DO UPDATE SET
-                 data = EXCLUDED.data,
-                 updated_at = NOW()""",
-            (name, json.dumps(wf))
-        )
-        return'''
-    if old_save_v1 in code:
-        code = code.replace(old_save_v1, old_save, 1)
-        changes += 1
-        print("  OK - save_workflow fixed")
+        print("  OK - schema init call inserted after _db_all")
     else:
-        print("  SKIP - save_workflow already correct")
+        print("  SKIP - could not find end of _db_all")
+else:
+    print("  SKIP - _db_all not found")
 
 # ═══════════════════════════════════════════════════════════════
-# 5. Write + verify
+# Write and verify
 # ═══════════════════════════════════════════════════════════════
 with open(SERVER, 'w', encoding='utf-8') as f:
     f.write(code)
@@ -275,27 +249,32 @@ except SyntaxError as e:
     print(f"SYNTAX ERROR line {e.lineno}: {e.msg}")
     if e.text:
         print(f"   {e.text[:120]}")
-    shutil.copy(SERVER + '.backup_db', SERVER)
+    shutil.copy(SERVER + '.backup_direct', SERVER)
     print("Restored from backup")
     exit(1)
 
-# Verify presence
+# ═══════════════════════════════════════════════════════════════
+# Verify all pieces in place
+# ═══════════════════════════════════════════════════════════════
 with open(SERVER, 'r', encoding='utf-8') as f:
     final = f.read()
 
 checks = [
-    ("psycopg import",       "import psycopg" in final),
-    ("No psycopg_pool",      "psycopg_pool" not in final),
-    ("DATABASE_URL read",    'os.environ.get("DATABASE_URL"' in final),
-    ("USE_DB computed",      "USE_DB = bool(DATABASE_URL)" in final),
-    ("Connection test",      "Neon connection OK" in final),
-    ("Schema init",          "def _db_init_schema" in final),
-    ("db_exec helper",       "def _db_exec" in final),
-    ("save_workflow DB",     "INSERT INTO workflows (name, payload" in final),
-    ("load_workflow DB",     "SELECT payload FROM workflows" in final),
-    ("save_creds DB",        "INSERT INTO credentials" in final),
-    ("memory DB",            "INSERT INTO memory_messages" in final),
-    ("Schema call once",     final.count("_db_init_schema()") >= 1),
+    ("psycopg import present",     "import psycopg" in final),
+    ("No psycopg_pool anywhere",   "psycopg_pool" not in final),
+    ("No ConnectionPool",          "ConnectionPool" not in final),
+    ("DATABASE_URL read",          'os.environ.get("DATABASE_URL"' in final),
+    ("USE_DB computed",            "USE_DB = bool(DATABASE_URL)" in final),
+    ("Direct connection test",     "Neon connection OK (direct connect)" in final),
+    ("_db_init_schema direct",     'psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True, connect_timeout=10)' in final),
+    ("save_workflow DB path",      "INSERT INTO workflows (name, payload" in final),
+    ("load_workflow DB path",      "SELECT payload FROM workflows" in final),
+    ("save_creds DB path",         "INSERT INTO credentials" in final),
+    ("memory_save_message DB",     "INSERT INTO memory_messages" in final),
+    ("Schema init call exists",    final.count("_db_init_schema()") >= 1),
+    ("app = Flask present",        "app = Flask(__name__)" in final),
+    ("app.run inside __main__",
+        any(line.startswith('    ') and 'app.run(host' in line for line in final.split('\n'))),
 ]
 all_ok = True
 for name, ok in checks:
@@ -305,8 +284,27 @@ for name, ok in checks:
 
 print()
 if all_ok and changes > 0:
-    print("PATCH COMPLETE")
+    print("PATCH COMPLETE — all checks passed")
 elif changes == 0:
     print("NOTHING CHANGED — already patched")
 else:
     print("PARTIAL — review FAIL lines")
+
+print()
+print("NEXT STEPS:")
+print()
+print("1. Update requirements.txt (remove psycopg_pool):")
+print("   flask>=3.0")
+print("   flask-cors>=4.0")
+print("   requests>=2.31")
+print("   python-dotenv>=1.0")
+print("   psycopg[binary]>=3.2")
+print("   ollama>=0.3.0")
+print()
+print("2. Test locally:")
+print("   python -c \"import server; print('app:', server.app, 'USE_DB:', server.USE_DB)\"")
+print()
+print("3. Commit and push:")
+print("   git add server.py requirements.txt")
+print("   git commit -m 'DB: direct psycopg connect, drop pool'")
+print("   git push")
