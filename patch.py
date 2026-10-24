@@ -7,7 +7,7 @@ SERVER = os.path.join(PROJECT, 'server.py')
 if not os.path.exists(SERVER):
     print("FAIL: missing " + SERVER); sys.exit(1)
 
-shutil.copy(SERVER, SERVER + '.backup_v9')
+shutil.copy(SERVER, SERVER + '.backup_v10')
 print("Backed up")
 
 with open(SERVER, 'r', encoding='utf-8') as f:
@@ -16,108 +16,67 @@ with open(SERVER, 'r', encoding='utf-8') as f:
 sc = 0
 
 # ============================================================
-# PATCH 1: Replace the entire binary-handling block
+# PATCH 1: For image/audio responses, return original URL (no bytes)
 # ============================================================
-print("\n[1] Rewriting HTTP binary handling (URL-first)...")
+print("\n[1] Image/audio responses return URL, not bytes...")
 
-# Match whatever the current binary block looks like after patch8
-# (patch8 may have applied; if it failed, we match the pre-patch8 version too)
-patterns = [
-    # Post-patch8 version
-    re.compile(
-        r'''                        if 'audio/' in content_type or 'image/' in content_type or 'octet-stream' in content_type:\n[\s\S]*?logs\.append\(current_memory\)''',
-        re.DOTALL
-    ),
-    # Pre-patch8 version (in case patch8 failed)
-    re.compile(
-        r'''                        if 'audio/' in content_type or 'image/' in content_type or 'octet-stream' in content_type:\n[\s\S]*?logs\.append\(f"HTTP \{r\.status_code\}: saved binary to \{filename\} \(\{len\(r\.content\)\} bytes\)"\)''',
-        re.DOTALL
-    ),
-]
+# Match the current binary save block. Two variants possible:
+# 1. Post-patch8 (_IS_SERVERLESS present)
+# 2. Original (write_bytes directly)
+# Use a broad regex that catches the whole `if 'audio/' in content_type ...` branch
+pat = re.compile(
+    r"(if 'audio/' in content_type or 'image/' in content_type or 'octet-stream' in content_type:\n)([\s\S]*?)(\n\s{20,28}(?:else:|except |current_memory))",
+)
 
-matched = None
-for pat in patterns:
-    m = pat.search(server)
-    if m:
-        matched = m
-        break
-
-if not matched:
+m = pat.search(server)
+if not m:
     print("  FAIL: binary block not found")
     sys.exit(1)
 
-new_block = '''                        if 'audio/' in content_type or 'image/' in content_type or 'octet-stream' in content_type:
-                            # Image/audio URLs should NEVER be downloaded into local filesystem.
+# Show what we found
+print("  Found block ({} chars):".format(len(m.group(0))))
+print("  First 200 chars: " + repr(m.group(0)[:200]))
+
+# Replace everything inside the `if` block with a one-liner that returns the URL
+new_inner = """                            # Image/audio URL responses: return the URL, do NOT download bytes.
                             # Instagram/Zernio need URLs. Bytes-in-/tmp breaks on Vercel and
                             # tool_zernio only accepts URLs anyway.
-                            #
-                            # For GET requests with redirects, we already returned the
-                            # Location URL above. If we got here, we have actual bytes —
-                            # that means this isn't a redirect URL workflow.
-                            # Return the original URL (user supplied it) instead of bytes.
                             current_memory = url
-                            logs.append(f"HTTP {r.status_code}: image/audio response at {url} — using URL, not bytes")'''
+                            logs.append(f"HTTP {r.status_code}: image/audio -> using URL {url[:80]}")
+"""
 
-server = server[:matched.start()] + new_block + server[matched.end():]
+# Preserve the closing token (m.group(3)) so the else/except/current_memory below still lines up
+server = server[:m.start()] + m.group(1) + new_inner + m.group(3) + server[m.end():]
 sc += 1
-print("  OK: image/audio responses now return URL, not bytes")
+print("  OK: image/audio responses now return URL")
 
 # ============================================================
-# PATCH 2: Make allow_redirects=False for ALL GETs (already done in patch8, verify)
+# PATCH 2: For GET requests, capture redirect Location (safer version)
 # ============================================================
-print("\n[2] Verifying GET redirect handling...")
+print("\n[2] Adding GET redirect capture (safer)...")
 
-if 'allow_redirects' not in server or 'is_get and r.status_code in (301, 302' not in server:
-    print("  WARN: redirect detection may be missing - checking...")
-    # Find the HTTP block and ensure allow_redirects is set
-    old_http = '''                        kwargs = {"timeout": 30, "headers": headers}
-                        if method in ('POST','PUT','PATCH'):
-                            if body:
-                                try:
-                                    kwargs["json"] = json.loads(body) if isinstance(body, str) else body
-                                except Exception:
-                                    kwargs["json"] = body
-                            else:
-                                kwargs["json"] = {"content": current_memory}
-                        r = requests.request(method, url, **kwargs)'''
-
-    new_http = '''                        kwargs = {"timeout": 30, "headers": headers}
-                        if method in ('POST','PUT','PATCH'):
-                            if body:
-                                try:
-                                    kwargs["json"] = json.loads(body) if isinstance(body, str) else body
-                                except Exception:
-                                    kwargs["json"] = body
-                            else:
-                                kwargs["json"] = {"content": current_memory}
-                        else:
-                            # GET: don't follow redirects — capture Location header
-                            # (picsum.photos and similar image APIs redirect to actual image URL)
+# Only modify the `requests.request(...)` call — nothing else
+old_req = '                        r = requests.request(method, url, **kwargs)'
+new_req = '''                        # GET: capture redirect location instead of following
+                        if method == 'GET':
                             kwargs["allow_redirects"] = False
-                        
                         r = requests.request(method, url, **kwargs)
-                        
-                        # If GET returned a redirect, capture the target URL and skip further processing
                         if method == 'GET' and r.status_code in (301, 302, 303, 307, 308):
-                            location = r.headers.get('Location', '')
-                            if location:
-                                # Resolve relative Location against original URL
-                                if location.startswith('/'):
-                                    from urllib.parse import urlparse, urlunparse
-                                    parsed = urlparse(url)
-                                    location = urlunparse((parsed.scheme, parsed.netloc, location, '', '', ''))
-                                current_memory = location
-                                logs.append(f"HTTP {r.status_code}: redirect to {location[:100]}")
+                            _loc = r.headers.get('Location', '')
+                            if _loc:
+                                current_memory = _loc
+                                logs.append(f"HTTP {r.status_code}: redirect -> {_loc[:80]}")
                                 continue'''
 
-    if old_http in server:
-        server = server.replace(old_http, new_http, 1)
-        sc += 1
-        print("  OK: added allow_redirects=False and Location capture")
-    else:
-        print("  FAIL: HTTP request block not found")
+if old_req in server and 'redirect ->' not in server:
+    server = server.replace(old_req, new_req, 1)
+    sc += 1
+    print("  OK: GET redirects captured")
 else:
-    print("  OK: redirect handling already present")
+    if 'redirect ->' in server:
+        print("  SKIP: redirect capture already present")
+    else:
+        print("  FAIL: requests.request line not found")
 
 with open(SERVER, 'w', encoding='utf-8') as f:
     f.write(server)
@@ -127,7 +86,16 @@ try:
     print("\n  [OK  ] server.py compiles")
 except SyntaxError as e:
     print("\n  [FAIL] line {}: {}".format(e.lineno, e.msg))
-    shutil.copy(SERVER + '.backup_v9', SERVER)
+    # Show the offending lines
+    lines = open(SERVER, encoding='utf-8').read().splitlines()
+    if e.lineno and e.lineno <= len(lines):
+        start = max(0, e.lineno - 3)
+        end = min(len(lines), e.lineno + 2)
+        print("  Context:")
+        for i in range(start, end):
+            marker = " >>> " if i == e.lineno - 1 else "     "
+            print("  {}L{:4d}: {}".format(marker, i + 1, lines[i]))
+    shutil.copy(SERVER + '.backup_v10', SERVER)
     print("  Restored from backup")
     sys.exit(1)
 
@@ -141,10 +109,9 @@ print("=" * 55)
 fs = open(SERVER, 'r', encoding='utf-8').read()
 
 checks = [
-    ("no write_bytes for images",     "filepath.write_bytes(r.content)" not in fs or "URL, not bytes" in fs),
-    ("GET disables redirects",        'kwargs["allow_redirects"] = False' in fs),
-    ("Location captured for GET",     "r.status_code in (301, 302, 303, 307, 308)" in fs),
-    ("image responses use URL",       "image/audio response at" in fs),
+    ("image/audio returns URL",   "image/audio -> using URL" in fs),
+    ("GET redirects captured",    "GET and r.status_code in (301, 302" in fs or "redirect ->" in fs),
+    ("no write_bytes for images", "filepath.write_bytes(r.content)" not in fs),
 ]
 
 ok = True
@@ -161,7 +128,7 @@ if ok:
     print()
     print("Next:")
     print("  git add server.py")
-    print("  git commit -m 'HTTP node: URLs not bytes for image/audio'")
+    print("  git commit -m 'HTTP: URLs not bytes for image/audio'")
     print("  git push origin main")
 else:
-    print("Review FAIL lines. Backup: server.py.backup_v9")
+    print("Review FAIL lines. Backup: server.py.backup_v10")

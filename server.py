@@ -1465,14 +1465,25 @@ def execute_workflow(nodes, extra_input=None):
                                     kwargs["json"] = body
                             else:
                                 kwargs["json"] = {"content": current_memory}
+                        # GET: capture redirect location instead of following
+                        if method == 'GET':
+                            kwargs["allow_redirects"] = False
                         r = requests.request(method, url, **kwargs)
+                        if method == 'GET' and r.status_code in (301, 302, 303, 307, 308):
+                            _loc = r.headers.get('Location', '')
+                            if _loc:
+                                current_memory = _loc
+                                logs.append(f"HTTP {r.status_code}: redirect -> {_loc[:80]}")
+                                continue
                         # ---- Detect binary responses (audio, image, etc.) ----
                         content_type = r.headers.get('Content-Type', '')
                         if 'audio/' in content_type or 'image/' in content_type or 'octet-stream' in content_type:
-                            ext = 'wav' if 'wav' in content_type else ('mp3' if 'mp3' in content_type else ('png' if 'png' in content_type else 'bin'))
-                            filename = f"output_{uuid.uuid4().hex[:8]}.{ext}"
-                            filepath = Path(filename)
-                            filepath.write_bytes(r.content)
+                            # Image/audio URL responses: return the URL, do NOT download bytes.
+                            # Instagram/Zernio need URLs. Bytes-in-/tmp breaks on Vercel and
+                            # tool_zernio only accepts URLs anyway.
+                            current_memory = url
+                            logs.append(f"HTTP {r.status_code}: image/audio -> using URL {url[:80]}")
+
                             current_memory = str(filepath.absolute())
                             logs.append(f"HTTP {r.status_code}: saved binary to {filename} ({len(r.content)} bytes)")
                         else:
