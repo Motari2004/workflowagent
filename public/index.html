@@ -2307,75 +2307,69 @@ function buildPayload() {
                 }
 
                 // Bulletproof media URL parser.
-                // Accepts:
-                //   - Bare URL: "https://a.com/x.jpg"
-                //   - Array: ["https://a.com/x.jpg"]
-                //   - JSON array string: '["https://a.com/x.jpg"]'
-                //   - Comma-separated: "https://a.com/x.jpg, https://b.com/y.jpg"
-                //   - Newline-separated
-                //   - Nested JSON array strings inside arrays
-                //   - Template syntax: "${...}" (stripped)
-                // Returns: array of clean, valid URLs.
+                // SPECIAL CASE: if the value is exactly "FROM_PREVIOUS" (or the
+                // array ["FROM_PREVIOUS"]), pass it through untouched. The server
+                // resolves it against the previous node's JSON output.
                 function parseMediaUrls(raw) {
-                    var result = [];
+                    // Detect FROM_PREVIOUS early
+                    if (raw === 'FROM_PREVIOUS') return ['FROM_PREVIOUS'];
+                    if (Array.isArray(raw) && raw.length === 1 && raw[0] === 'FROM_PREVIOUS') {
+                        return ['FROM_PREVIOUS'];
+                    }
                     
+                    var result = [];
+
                     function pushUrl(u) {
                         if (typeof u !== 'string') return;
                         var s = stripTemplates(u);
                         if (!s) return;
-                        // Must look like a URL
                         if (s.startsWith('http://') || s.startsWith('https://')) {
                             result.push(s);
                         }
                     }
-                    
+
                     function walk(val, depth) {
-                        if (depth > 5) return;  // safety against deeply nested
+                        if (depth > 5) return;
                         if (val === null || val === undefined) return;
-                        
+                        if (val === 'FROM_PREVIOUS') {
+                            result.push('FROM_PREVIOUS');
+                            return;
+                        }
                         if (Array.isArray(val)) {
                             for (var i = 0; i < val.length; i++) walk(val[i], depth + 1);
                             return;
                         }
-                        
                         if (typeof val !== 'string') return;
-                        
                         var s = stripTemplates(val);
                         if (!s) return;
-                        
-                        // Try JSON parse if it looks like an array
                         var trimmed = s.trim();
+                        if (trimmed === 'FROM_PREVIOUS') {
+                            result.push('FROM_PREVIOUS');
+                            return;
+                        }
                         if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
                             try {
                                 var parsed = JSON.parse(trimmed);
                                 walk(parsed, depth + 1);
                                 return;
-                            } catch (_) { /* fall through */ }
+                            } catch (_) {}
                         }
-                        
-                        // Try JSON parse if it looks like a single JSON string ""...""
                         if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length > 2) {
                             try {
                                 var inner = JSON.parse(trimmed);
                                 walk(inner, depth + 1);
                                 return;
-                            } catch (_) { /* fall through */ }
+                            } catch (_) {}
                         }
-                        
-                        // Comma or newline separated?
                         if (trimmed.indexOf(',') !== -1 || trimmed.indexOf('\n') !== -1) {
                             var parts = trimmed.split(/[,\n]+/);
                             for (var j = 0; j < parts.length; j++) pushUrl(parts[j]);
                             return;
                         }
-                        
-                        // Bare URL
                         pushUrl(trimmed);
                     }
-                    
                     walk(raw, 0);
-                    
-                    // Dedupe while preserving order
+
                     var seen = {};
                     var deduped = [];
                     for (var k = 0; k < result.length; k++) {
@@ -2389,7 +2383,6 @@ function buildPayload() {
 
                 const mediaList = parseMediaUrls(d.media_urls);
                 const cleanMessage = stripTemplates(d.message || '');
-                // If message somehow ended up as a JSON array string, blank it
                 const messageFinal = (cleanMessage.startsWith('[') && cleanMessage.endsWith(']'))
                     ? ''
                     : cleanMessage;
