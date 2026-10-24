@@ -5,16 +5,16 @@ SERVER = os.path.join(PROJECT, 'server.py')
 HTML = os.path.join(PROJECT, 'public', 'index.html')
 
 if not os.path.exists(SERVER) or not os.path.exists(HTML):
-    print("ERROR: server.py or index.html not found"); sys.exit(1)
+    print("ERROR: files missing"); sys.exit(1)
 
-shutil.copy(SERVER, SERVER + '.backup_zernio_v2')
-shutil.copy(HTML, HTML + '.backup_zernio_v2')
-print("Backed up both files\n")
+shutil.copy(SERVER, SERVER + '.backup_buffchat')
+shutil.copy(HTML, HTML + '.backup_buffchat')
+print("Backed up both\n")
 
 sc, hc = 0, 0
 
 # ═══════════════════════════════════════════════════════════════
-# SERVER.PY — 4 CHANGES
+# SERVER.PY
 # ═══════════════════════════════════════════════════════════════
 print("=" * 60)
 print("SERVER.PY")
@@ -24,297 +24,392 @@ with open(SERVER, 'r', encoding='utf-8') as f:
     server = f.read()
 
 # ─────────────────────────────────────────────────────────────
-# 1. Replace tool_zernio with the CORRECT API calls
+# 1. Replace tool_buffer with proper GraphQL implementation
 # ─────────────────────────────────────────────────────────────
-print("\n[1] Replacing tool_zernio with real Zernio API...")
+print("\n[1] Rewriting tool_buffer with GraphQL...")
 
-new_zernio_tool = '''def tool_zernio(creds, msg, extra):
-    """Post to Zernio. Requires api_key, profile_id, and account_id.
-    Zernio docs: POST https://zernio.com/api/v1/posts
+new_buffer = '''def tool_buffer(creds, msg, extra):
+    """Post to Buffer via GraphQL API.
+    Requires: api_key, organization_id, channel_id
+    Buffer docs: https://developers.buffer.com/
     """
-    token = creds.get('api_key')
-    profile_id = creds.get('profile_id')
-    account_id = creds.get('account_id')
+    api_key = creds.get('api_key')
+    org_id = creds.get('organization_id')
+    channel_id = creds.get('channel_id')
 
-    if not token:
-        return "[ERROR] Zernio: api_key not configured (starts with sk_)"
-    if not profile_id:
-        return "[ERROR] Zernio: profile_id not configured (get from GET /v1/profiles)"
-    if not account_id:
-        return "[ERROR] Zernio: account_id not configured (get from GET /v1/accounts)"
+    if not api_key:
+        return "[ERROR] Buffer: api_key not configured (get from publish.buffer.com/settings/api)"
+    if not channel_id:
+        return "[ERROR] Buffer: channel_id not configured (use /buffer/channels to list)"
     if not (msg or '').strip():
-        return "[ERROR] Zernio: no content to post"
+        return "[ERROR] Buffer: no content to post"
 
     text = msg.strip()
+    if len(text) > 280:
+        text = text[:277] + '...'
 
-    # Zernio has a 24h duplicate-protection window — if this exact text was
-    # posted before, we get HTTP 409. Append a tiny nonce to break the hash.
-    # (Optional: comment out to let duplicate errors surface.)
-    import hashlib, time
-    nonce = hashlib.md5((text + str(time.time())).encode()).hexdigest()[:3]
-    text = text + " ·" + nonce
+    mutation = """
+    mutation CreatePost($input: CreatePostInput!) {
+      createPost(input: $input) {
+        ... on PostActionSuccess {
+          post {
+            id
+            text
+            status
+          }
+        }
+        ... on MutationError {
+          message
+          code
+        }
+      }
+    }
+    """
+
+    variables = {
+        "input": {
+            "channelId": channel_id,
+            "text": text,
+            "schedulingType": "automatic",
+            "mode": "addToQueue",
+        }
+    }
 
     try:
         r = requests.post(
-            'https://zernio.com/api/v1/posts',
+            'https://api.buffer.com',
             headers={
-                'Authorization': f'Bearer {token}',
+                'Authorization': f'Bearer {api_key}',
                 'Content-Type': 'application/json',
             },
-            json={
-                'profileId': profile_id,
-                'content': text,
-                'platforms': [{'accountId': account_id}],
-                'publishNow': True,
-            },
-            timeout=25,
+            json={"query": mutation, "variables": variables},
+            timeout=20,
         )
     except requests.exceptions.Timeout:
-        return "[ERROR] Zernio: timeout (25s)"
+        return "[ERROR] Buffer: timeout (20s)"
     except requests.exceptions.RequestException as e:
-        return f"[ERROR] Zernio: network: {e}"
-
-    if r.status_code in (200, 201):
-        try:
-            data = r.json()
-            post_id = data.get('_id') or data.get('id', '?')
-            return f"Zernio {r.status_code}: posted (id={post_id})"
-        except Exception:
-            return f"Zernio {r.status_code}: posted"
+        return f"[ERROR] Buffer: network: {e}"
 
     if r.status_code == 401:
-        return "[ERROR] Zernio: 401 Unauthorized — API key invalid or expired"
-    if r.status_code == 403:
-        return "[ERROR] Zernio: 403 Forbidden — account_id may not belong to this profile"
-    if r.status_code == 409:
-        return "[ERROR] Zernio: 409 duplicate — same content posted within 24h"
-    if r.status_code == 429:
-        retry_after = r.headers.get('Retry-After', '60')
-        return f"[ERROR] Zernio: 429 rate limit — retry after {retry_after}s"
-    return f"[ERROR] Zernio {r.status_code}: {r.text[:300]}"
+        return "[ERROR] Buffer: 401 Unauthorized — check API key"
+    if r.status_code >= 500:
+        return f"[ERROR] Buffer: server {r.status_code}"
+
+    if r.status_code != 200:
+        return f"[ERROR] Buffer {r.status_code}: {r.text[:300]}"
+
+    try:
+        data = r.json()
+    except Exception:
+        return f"[ERROR] Buffer: non-JSON response: {r.text[:200]}"
+
+    # GraphQL always returns 200 — errors are in the body
+    if 'errors' in data and data['errors']:
+        err_msg = data['errors'][0].get('message', 'unknown')
+        return f"[ERROR] Buffer GraphQL: {err_msg[:200]}"
+
+    result = (data.get('data') or {}).get('createPost') or {}
+    
+    # Success case
+    if 'post' in result:
+        post = result['post']
+        return f"Buffer 200: queued (id={post.get('id','?')}, status={post.get('status','?')})"
+
+    # MutationError case
+    if 'message' in result:
+        return f"[ERROR] Buffer: {result['message']}"
+
+    return f"[ERROR] Buffer: unexpected response shape: {str(result)[:200]}"
 
 
 '''
 
-zernio_pattern = re.compile(
-    r"def tool_zernio\(creds, msg, extra\):[\s\S]*?(?=\nTOOL_HANDLERS = \{|\ndef |\n@app\.route)",
+buffer_pattern = re.compile(
+    r"def tool_buffer\(creds, msg, extra\):[\s\S]*?(?=\nTOOL_HANDLERS = \{|\ndef tool_zernio)",
     re.DOTALL
 )
-
-if zernio_pattern.search(server):
-    server = zernio_pattern.sub(new_zernio_tool, server, count=1)
+if buffer_pattern.search(server):
+    server = buffer_pattern.sub(new_buffer, server, count=1)
     sc += 1
-    print("  OK — tool_zernio replaced with real Zernio API")
-else:
-    print("  WARN — tool_zernio not found, trying insertion before TOOL_HANDLERS")
-    if 'TOOL_HANDLERS = {' in server:
-        server = server.replace('TOOL_HANDLERS = {', new_zernio_tool + 'TOOL_HANDLERS = {', 1)
-        sc += 1
+    print("  OK — tool_buffer rewritten with GraphQL")
 
 # ─────────────────────────────────────────────────────────────
-# 2. Add _zernio_status() that returns profiles AND accounts
+# 2. Add Buffer live status helper + route
 # ─────────────────────────────────────────────────────────────
-print("\n[2] Adding _zernio_status() with profiles + accounts...")
+print("\n[2] Adding Buffer discovery helpers...")
 
-zernio_helpers = '''
+buffer_helpers = '''
 # ═══════════════════════════════════════════════════════════════
-# ZERNIO LIVE STATUS — profiles + accounts + health
+# BUFFER LIVE STATUS — GraphQL query for orgs and channels
 # ═══════════════════════════════════════════════════════════════
-def _zernio_status():
+def _buffer_status():
     result = {
         "configured": False,
         "api_key_set": False,
-        "profile_id_set": False,
-        "account_id_set": False,
-        "profiles": [],
-        "accounts": [],
-        "current_profile": None,
-        "current_account": None,
+        "org_id_set": False,
+        "channel_id_set": False,
+        "organizations": [],
+        "channels": [],
+        "current_org": None,
+        "current_channel": None,
         "error": None,
     }
     try:
-        creds = load_creds('zernio') or {}
+        creds = load_creds('buffer') or {}
     except Exception as e:
         result["error"] = "load_creds: " + str(e)
         return result
 
     api_key = (creds.get('api_key') or '').strip()
-    saved_profile = (creds.get('profile_id') or '').strip()
-    saved_account = (creds.get('account_id') or '').strip()
+    saved_org = (creds.get('organization_id') or '').strip()
+    saved_channel = (creds.get('channel_id') or '').strip()
 
     result["api_key_set"] = bool(api_key)
-    result["profile_id_set"] = bool(saved_profile)
-    result["account_id_set"] = bool(saved_account)
+    result["org_id_set"] = bool(saved_org)
+    result["channel_id_set"] = bool(saved_channel)
 
     if not api_key:
         return result
 
-    headers = {"Authorization": "Bearer " + api_key}
+    headers = {
+        "Authorization": "Bearer " + api_key,
+        "Content-Type": "application/json",
+    }
 
-    # Fetch profiles (GET /v1/profiles)
+    # Step 1: list organizations
     try:
-        r = requests.get('https://zernio.com/api/v1/profiles', headers=headers, timeout=10)
-        if r.status_code == 200:
-            d = r.json()
-            profiles_raw = d.get('profiles') if isinstance(d, dict) else d
-            if isinstance(profiles_raw, list):
-                for p in profiles_raw:
-                    if isinstance(p, dict):
-                        result["profiles"].append({
-                            "id": p.get('_id') or p.get('id') or '',
-                            "name": p.get('name') or '',
-                        })
-        elif r.status_code == 401:
-            result["error"] = "API key invalid (401)"
-            return result
+        r = requests.post(
+            'https://api.buffer.com',
+            headers=headers,
+            json={"query": "query { account { organizations { id name } } }"},
+            timeout=10,
+        )
     except Exception as e:
-        result["error"] = "profiles fetch: " + str(e)
+        result["error"] = "network: " + str(e)
         return result
 
-    # Fetch accounts (GET /v1/accounts)
-    try:
-        r = requests.get('https://zernio.com/api/v1/accounts', headers=headers, timeout=10)
-        if r.status_code == 200:
-            d = r.json()
-            accounts_raw = d.get('accounts') if isinstance(d, dict) else d
-            if isinstance(accounts_raw, list):
-                for a in accounts_raw:
-                    if isinstance(a, dict):
-                        result["accounts"].append({
-                            "id": a.get('_id') or a.get('id') or '',
-                            "platform": (a.get('platform') or a.get('service') or '').lower(),
-                            "name": a.get('name') or a.get('username') or a.get('handle') or '',
-                            "profile_id": a.get('profileId') or a.get('profile_id') or '',
-                        })
-        elif r.status_code == 401:
-            result["error"] = "API key invalid (401)"
-            return result
-    except Exception as e:
-        result["error"] = "accounts fetch: " + str(e)
+    if r.status_code == 401:
+        result["error"] = "API key invalid (401)"
         return result
+    if r.status_code != 200:
+        result["error"] = f"HTTP {r.status_code}"
+        return result
+
+    try:
+        data = r.json()
+        orgs = data.get('data', {}).get('account', {}).get('organizations') or []
+        for o in orgs:
+            result["organizations"].append({
+                "id": o.get('id', ''),
+                "name": o.get('name', ''),
+            })
+    except Exception as e:
+        result["error"] = "parse orgs: " + str(e)
+        return result
+
+    # Step 2: if we have an org, list channels
+    target_org = saved_org
+    if not target_org and result["organizations"]:
+        target_org = result["organizations"][0]["id"]
+
+    if target_org:
+        try:
+            r = requests.post(
+                'https://api.buffer.com',
+                headers=headers,
+                json={
+                    "query": "query GetChannels($orgId: String!) { channels(input: { organizationId: $orgId }) { id name service } }",
+                    "variables": {"orgId": target_org},
+                },
+                timeout=10,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                chans = data.get('data', {}).get('channels') or []
+                for c in chans:
+                    result["channels"].append({
+                        "id": c.get('id', ''),
+                        "name": c.get('name', ''),
+                        "service": (c.get('service') or '').lower(),
+                    })
+        except Exception as e:
+            result["error"] = "channels fetch: " + str(e)
+            return result
 
     result["configured"] = True
 
-    # Match current profile/account
-    if saved_profile:
-        for p in result["profiles"]:
-            if p["id"] == saved_profile:
-                result["current_profile"] = p
+    # Match current
+    if saved_org:
+        for o in result["organizations"]:
+            if o["id"] == saved_org:
+                result["current_org"] = o
                 break
-    if saved_account:
-        for a in result["accounts"]:
-            if a["id"] == saved_account:
-                result["current_account"] = a
+    if saved_channel:
+        for c in result["channels"]:
+            if c["id"] == saved_channel:
+                result["current_channel"] = c
                 break
 
     return result
 
 
-def _zernio_status_block(status):
+def _buffer_status_block(status):
     if not status["api_key_set"]:
         return (
-            "\\n[ZERNIO STATUS]\\n"
-            "NOT CONFIGURED — no API key saved.\\n"
-            "Tell user: Credentials → Zernio → add API key (sk_...).\\n"
-            "[END]\\n"
+            "\\n[BUFFER STATUS]\\n"
+            "NOT CONFIGURED — no API key. Get one at publish.buffer.com/settings/api\\n"
+            "Tell user to configure Credentials → Buffer.\\n[END]\\n"
         )
     if status["error"]:
         return (
-            "\\n[ZERNIO STATUS]\\n"
-            "API key check failed: " + status["error"] + "\\n"
-            "Tell user to verify API key in Credentials → Zernio.\\n"
-            "[END]\\n"
+            "\\n[BUFFER STATUS]\\n"
+            "API check failed: " + status["error"] + "\\n"
+            "Tell user to check API key in Credentials → Buffer.\\n[END]\\n"
         )
 
-    lines = ["\\n[ZERNIO STATUS]"]
-    if status["profiles"]:
-        lines.append("Profiles:")
-        for p in status["profiles"]:
-            marker = " ← current" if status["current_profile"] and p["id"] == status["current_profile"]["id"] else ""
-            lines.append("  - " + p["name"] + " (id: " + p["id"] + ")" + marker)
+    lines = ["\\n[BUFFER STATUS]"]
+    if status["organizations"]:
+        lines.append("Organizations:")
+        for o in status["organizations"]:
+            marker = " ← current" if status["current_org"] and o["id"] == status["current_org"]["id"] else ""
+            lines.append("  - " + o["name"] + " (id: " + o["id"] + ")" + marker)
     else:
-        lines.append("No profiles yet. User must create one at zernio.com → Profiles.")
+        lines.append("No organizations found.")
 
-    if status["accounts"]:
-        lines.append("Connected channels:")
-        for a in status["accounts"]:
-            marker = " ← current" if status["current_account"] and a["id"] == status["current_account"]["id"] else ""
-            lines.append("  - " + a["platform"].title() + ": " + a["name"] + " (id: " + a["id"] + ", profile: " + a["profile_id"] + ")" + marker)
+    if status["channels"]:
+        lines.append("Channels:")
+        for c in status["channels"]:
+            marker = " ← current" if status["current_channel"] and c["id"] == status["current_channel"]["id"] else ""
+            lines.append("  - " + c["service"].title() + ": " + c["name"] + " (id: " + c["id"] + ")" + marker)
     else:
-        lines.append("No social channels connected. User must connect Facebook/LinkedIn/etc at zernio.com → Accounts.")
+        lines.append("No channels connected. User must connect social accounts at publish.buffer.com.")
 
     lines.append("")
-    lines.append("IMPORTANT: To post, BOTH profile_id AND account_id must be set in credentials.")
-    lines.append("If user didn't specify which channel, ask them to pick from the connected list.")
-    lines.append("Do NOT invent IDs. Only use the ones listed above.")
-    lines.append("[END ZERNIO STATUS]\\n")
+    lines.append("To post to Buffer, both organization_id and channel_id must be set.")
+    lines.append("Do NOT invent channel IDs. Only use the ones above.")
+    lines.append("[END BUFFER STATUS]\\n")
     return "\\n".join(lines)
 
 
 '''
 
-if 'def _zernio_status(' not in server:
-    anchor = "@app.route('/ai-chat', methods=['POST', 'OPTIONS'])"
+if 'def _buffer_status(' not in server:
+    anchor = "@app.route('/zernio/accounts', methods=['GET'])"
     if anchor in server:
-        server = server.replace(anchor, zernio_helpers + anchor, 1)
+        server = server.replace(anchor, buffer_helpers + anchor, 1)
         sc += 1
-        print("  OK — status helpers added")
+        print("  OK — buffer status helpers added")
     else:
-        print("  FAIL — ai_chat route not found")
-else:
-    # Replace existing (older version)
-    old_status_pattern = re.compile(
-        r"def _zernio_status\(\):[\s\S]*?(?=\n@app\.route|\ndef [a-z_]+\(|$)",
-        re.DOTALL
-    )
-    server = old_status_pattern.sub(zernio_helpers.strip() + "\n\n", server, count=1)
-    sc += 1
-    print("  OK — status helpers replaced")
-
-# ─────────────────────────────────────────────────────────────
-# 3. Inject status into ai_chat (only when relevant)
-# ─────────────────────────────────────────────────────────────
-print("\n[3] Wiring status injection into ai_chat...")
-
-inj_block = '''
-        # Live Zernio status — only when message mentions social posting
-        try:
-            msg_lc = (message or "").lower()
-            if any(k in msg_lc for k in ["zernio", "post to", "social", "facebook", "instagram", "linkedin", "twitter"]):
-                zs = _zernio_status()
-                system = system + _zernio_status_block(zs)
-                print(f"[ai-chat] Zernio status injected ({len(zs.get('accounts', []))} accounts)")
-        except Exception as z_err:
-            print(f"[ai-chat] Zernio status check failed: {z_err}")
-'''
-
-if 'Zernio status injected' not in server:
-    # Insert after memory_context block
-    old_mem = '''        except Exception as mem_err:
-            print(f"[ai-chat] Memory load failed (non-fatal): {mem_err}")'''
-
-    if old_mem in server:
-        server = server.replace(old_mem, old_mem + "\n" + inj_block, 1)
+        anchor2 = "@app.route('/ai-chat', methods=['POST', 'OPTIONS'])"
+        server = server.replace(anchor2, buffer_helpers + anchor2, 1)
         sc += 1
-        print("  OK — injection added")
+        print("  OK — buffer helpers added (alt anchor)")
 
-# ─────────────────────────────────────────────────────────────
-# 4. Expose /zernio/accounts (returns profiles too)
-# ─────────────────────────────────────────────────────────────
-print("\n[4] Ensuring /zernio/accounts endpoint...")
-
-if "@app.route('/zernio/accounts'" not in server:
-    zroute = '''@app.route('/zernio/accounts', methods=['GET'])
-def zernio_accounts():
-    return jsonify(_zernio_status())
+# Add route
+if "@app.route('/buffer/channels'" not in server:
+    zroute = '''@app.route('/buffer/channels', methods=['GET'])
+def buffer_channels():
+    return jsonify(_buffer_status())
 
 
 '''
-    anchor = "@app.route('/ai-models', methods=['GET'])"
+    anchor = "@app.route('/zernio/accounts', methods=['GET'])"
     if anchor in server:
         server = server.replace(anchor, zroute + anchor, 1)
         sc += 1
-        print("  OK — /zernio/accounts added")
+        print("  OK — /buffer/channels route added")
+
+# ─────────────────────────────────────────────────────────────
+# 3. Add Buffer status injection alongside Zernio
+# ─────────────────────────────────────────────────────────────
+print("\n[3] Wiring Buffer status injection...")
+
+buffer_inject = '''
+        # Live Buffer status
+        try:
+            msg_lc2 = (message or "").lower()
+            if any(k in msg_lc2 for k in ["buffer", "post to social", "queue"]):
+                bs = _buffer_status()
+                system = system + _buffer_status_block(bs)
+                print(f"[ai-chat] Buffer status injected ({len(bs.get('channels', []))} channels)")
+        except Exception as b_err:
+            print(f"[ai-chat] Buffer status check failed: {b_err}")
+'''
+
+if 'Buffer status injected' not in server:
+    anchor = 'print(f"[ai-chat] Zernio status injected'
+    if anchor in server:
+        idx = server.find(anchor)
+        line_end = server.find('\n', idx)
+        server = server[:line_end+1] + buffer_inject + server[line_end+1:]
+        sc += 1
+        print("  OK — buffer injection added")
+
+# ─────────────────────────────────────────────────────────────
+# 4. Add CONVERSATION PROTOCOL to the prompt
+# ─────────────────────────────────────────────────────────────
+print("\n[4] Adding conversation protocol to prompt...")
+
+convo_block = '''        "### 🗣 CONVERSATION PROTOCOL — READ FIRST 🗣\\n"
+        "You are having a CONVERSATION with a human. Not dumping JSON.\\n\\n"
+
+        "MANDATORY FLOW for every workflow request:\\n"
+        "  1. ACKNOWLEDGE — one short sentence showing you understood\\n"
+        "  2. CLARIFY — if anything is ambiguous, ask up to 2 focused questions\\n"
+        "     (target channel, content source, data source, delivery method)\\n"
+        "  3. CONFIRM — state what you're about to build in plain English\\n"
+        "  4. BUILD — output the JSON workflow inside a ```json block\\n"
+        "  5. EXPLAIN — 1-2 sentences: what it does, what user must configure\\n\\n"
+
+        "RULES:\\n"
+        "  - NEVER output JSON as the first response. Always talk first.\\n"
+        "  - If the request is clear and you have all info → still ACK + CONFIRM,\\n"
+        "    then build in the SAME message.\\n"
+        "  - If missing info → ASK, do NOT build. Wait for the reply.\\n"
+        "  - If the user says 'yes' / 'ok' / 'go' / 'build it' → NOW build.\\n"
+        "  - After building, offer: 'Want me to load it, adjust it, or explain it?'\\n"
+        "  - For greetings or questions → just answer. NEVER dump JSON for a greeting.\\n\\n"
+
+        "BAD (do NOT do this):\\n"
+        "  User: 'post a quote to zernio'\\n"
+        "  AI: [JSON array immediately]\\n\\n"
+
+        "GOOD:\\n"
+        "  User: 'post a quote to zernio'\\n"
+        "  AI: 'Happy to. Two quick things: which Zernio channel, and should I fetch\\n"
+        "       a random quote or use one you provide?'\\n"
+        "  User: 'Facebook, random'\\n"
+        "  AI: 'Got it — fetching a random quote, posting to Facebook via Zernio.\\n"
+        "       Here's the workflow:' [JSON]\\n"
+        "       'You'll need Zernio credentials (api_key + profile_id + account_id)\\n"
+        "        already configured in Credentials. Want me to load it?'\\n\\n"
+
+'''
+
+if 'CONVERSATION PROTOCOL' not in server:
+    # Insert right after the "You are the Workflow Pro Architect" line
+    old_open = '''        "You are the Workflow Pro Architect. Concise, execution-focused.\\n\\n"'''
+    if old_open in server:
+        server = server.replace(old_open, old_open + "\n" + convo_block, 1)
+        sc += 1
+        print("  OK — conversation protocol added")
+    else:
+        print("  WARN — could not find prompt opening")
+
+# ─────────────────────────────────────────────────────────────
+# 5. Update tool/integration schema to include buffer
+# ─────────────────────────────────────────────────────────────
+print("\n[5] Ensuring buffer is in the schema...")
+
+old_schema = '''        "                       buffer, zernio.\\n"'''
+new_schema = '''        "                       buffer, zernio.\\n"
+        "                     ← Buffer needs: api_key + organization_id + channel_id\\n"
+        "                     ← Zernio needs: api_key + profile_id + account_id\\n"'''
+
+if old_schema in server and 'Buffer needs: api_key' not in server:
+    server = server.replace(old_schema, new_schema, 1)
+    sc += 1
+    print("  OK — schema mentions buffer credentials")
 
 with open(SERVER, 'w', encoding='utf-8') as f:
     f.write(server)
@@ -323,12 +418,12 @@ try:
     compile(open(SERVER, 'r', encoding='utf-8').read(), SERVER, 'exec')
     print("\n  [OK  ] server.py compiles")
 except SyntaxError as e:
-    print("  [FAIL] line {}: {}".format(e.lineno, e.msg))
-    shutil.copy(SERVER + '.backup_zernio_v2', SERVER)
+    print(f"  [FAIL] line {e.lineno}: {e.msg}")
+    shutil.copy(SERVER + '.backup_buffchat', SERVER)
     sys.exit(1)
 
 # ═══════════════════════════════════════════════════════════════
-# INDEX.HTML — 2 CHANGES
+# INDEX.HTML
 # ═══════════════════════════════════════════════════════════════
 print("\n" + "=" * 60)
 print("INDEX.HTML")
@@ -338,102 +433,78 @@ with open(HTML, 'r', encoding='utf-8') as f:
     html = f.read()
 
 # ─────────────────────────────────────────────────────────────
-# 5. Zernio credential modal: profile + channel dropdowns
+# 6. Update Buffer TOOLS creds to include org id
 # ─────────────────────────────────────────────────────────────
-print("\n[5] Building Zernio credential modal with 2 dropdowns...")
+print("\n[6] Updating Buffer TOOLS entry...")
 
-old_fields_pattern = re.compile(
-    r"        let fieldsHtml = '';\s*\n\s*if \(service === 'zernio'\) \{[\s\S]*?\n        \} else \{[\s\S]*?\n        \}",
-    re.DOTALL
-)
+old_buf = "'buffer':          { label:\"Buffer\",          icon:\"fa-buffer\",          brand:true,  color:\"#168EEA\", creds:[\"api_key\",\"channel_id\"] },"
+new_buf = "'buffer':          { label:\"Buffer\",          icon:\"fa-buffer\",          brand:true,  color:\"#168EEA\", creds:[\"api_key\",\"organization_id\",\"channel_id\"] },"
 
-new_fields = '''        let fieldsHtml = '';
-        
-        if (service === 'zernio') {
-            let zs = { profiles: [], accounts: [], error: null, api_key_set: false };
+if old_buf in html:
+    html = html.replace(old_buf, new_buf, 1)
+    hc += 1
+    print("  OK — Buffer creds updated")
+else:
+    print("  WARN — Buffer TOOLS entry not matched")
+
+# ─────────────────────────────────────────────────────────────
+# 7. Add Buffer dropdowns in credential modal
+# ─────────────────────────────────────────────────────────────
+print("\n[7] Adding Buffer credential dropdowns...")
+
+old_submit = '''        if (service === 'zernio') {'''
+new_submit = '''        if (service === 'buffer') {
+            // Buffer: fetch orgs + channels, show dropdowns
+            let bs = { organizations: [], channels: [], error: null, api_key_set: false };
             try {
-                const zres = await fetch('/zernio/accounts');
-                if (zres.ok) zs = await zres.json();
-            } catch (e) { zs.error = e.message; }
+                const bres = await fetch('/buffer/channels');
+                if (bres.ok) bs = await bres.json();
+            } catch (e) { bs.error = e.message; }
             
             const apiKeyVal = (existing['api_key'] || '').toString().replace(/"/g, '&quot;');
-            const currentProfileId = existing['profile_id'] || '';
-            const currentAccountId = existing['account_id'] || '';
+            const currentOrgId = existing['organization_id'] || '';
+            const currentChannelId = existing['channel_id'] || '';
             
-            fieldsHtml = `<label>api key (sk_...)</label>
-                <input name="api_key" value="${apiKeyVal}" autocomplete="off" placeholder="sk_live_..." />`;
+            fieldsHtml = `<label>api key</label>
+                <input name="api_key" value="${apiKeyVal}" autocomplete="off" placeholder="Bearer token from publish.buffer.com/settings/api" />`;
             
-            if (zs.profiles && zs.profiles.length > 0) {
-                const opts = zs.profiles.map(p => 
-                    `<option value="${p.id}" ${p.id === currentProfileId ? 'selected' : ''}>${p.name || '(unnamed)'} (${p.id})</option>`
+            if (bs.organizations && bs.organizations.length > 0) {
+                const opts = bs.organizations.map(o => 
+                    `<option value="${o.id}" ${o.id === currentOrgId ? 'selected' : ''}>${o.name || '(unnamed)'}</option>`
                 ).join('');
-                fieldsHtml += `<label style="margin-top:12px;">profile</label>
-                    <select name="profile_id" class="pro-input" style="width:100%; height:38px;">
-                        <option value="">-- choose a profile --</option>
+                fieldsHtml += `<label style="margin-top:12px;">organization</label>
+                    <select name="organization_id" class="pro-input" style="width:100%; height:38px;">
+                        <option value="">-- choose an organization --</option>
                         ${opts}
                     </select>`;
             } else {
-                fieldsHtml += `<label style="margin-top:12px;">profile id</label>
-                    <input name="profile_id" value="${(currentProfileId || '').replace(/"/g, '&quot;')}" autocomplete="off" placeholder="profile_..." />
+                fieldsHtml += `<label style="margin-top:12px;">organization id</label>
+                    <input name="organization_id" value="${(currentOrgId || '').replace(/"/g, '&quot;')}" autocomplete="off" />
                     <div style="font-size:10px; color:#f59e0b; margin-top:4px;">
-                        ${zs.error ? zs.error : 'No profiles loaded. Save API key first, then re-open.'}
+                        ${bs.error ? bs.error : 'Save API key first, then re-open to load organizations.'}
                     </div>`;
             }
             
-            if (zs.accounts && zs.accounts.length > 0) {
-                const opts = zs.accounts.map(a => 
-                    `<option value="${a.id}" ${a.id === currentAccountId ? 'selected' : ''}>${a.platform.toUpperCase()} — ${a.name || '(unnamed)'}</option>`
+            if (bs.channels && bs.channels.length > 0) {
+                const opts = bs.channels.map(c => 
+                    `<option value="${c.id}" ${c.id === currentChannelId ? 'selected' : ''}>${c.service.toUpperCase()} — ${c.name}</option>`
                 ).join('');
                 fieldsHtml += `<label style="margin-top:12px;">channel to post to</label>
-                    <select name="account_id" class="pro-input" style="width:100%; height:38px;">
+                    <select name="channel_id" class="pro-input" style="width:100%; height:38px;">
                         <option value="">-- choose a channel --</option>
                         ${opts}
-                    </select>
-                    <div style="font-size:10px; color:#64748b; margin-top:4px;">
-                        ${zs.accounts.length} channel${zs.accounts.length > 1 ? 's' : ''} connected.
-                    </div>`;
+                    </select>`;
             } else {
-                fieldsHtml += `<label style="margin-top:12px;">account id</label>
-                    <input name="account_id" value="${(currentAccountId || '').replace(/"/g, '&quot;')}" autocomplete="off" placeholder="acc_..." />
-                    <div style="font-size:10px; color:#f59e0b; margin-top:4px;">
-                        No channels detected. Connect at zernio.com → Accounts, then re-open.
-                    </div>`;
+                fieldsHtml += `<label style="margin-top:12px;">channel id</label>
+                    <input name="channel_id" value="${(currentChannelId || '').replace(/"/g, '&quot;')}" autocomplete="off" />`;
             }
-        } else {
-            fieldsHtml = tool.creds.length > 0
-                ? tool.creds.map(k => {
-                    const val = (existing[k] || '').toString().replace(/"/g, '&quot;');
-                    return `<label>${k.replace(/_/g, ' ')}</label><input name="${k}" value="${val}" autocomplete="off" />`;
-                }).join('')
-                : '<p class="text-xs text-slate-500">This tool requires no credentials.</p>';
-        }'''
+        } else if (service === 'zernio') {'''
 
-if old_fields_pattern.search(html):
-    html = old_fields_pattern.sub(new_fields, html, count=1)
-    hc += 1
-    print("  OK — Zernio modal now has profile + channel dropdowns")
-else:
-    print("  WARN — fields pattern not matched; checking for older single-dropdown version")
-    old_single = re.compile(r"        let fieldsHtml = '';[\s\S]*?\n        \}", re.DOTALL)
-    if old_single.search(html):
-        html = old_single.sub(new_fields, html, count=1)
+if 'service === \'buffer\'' not in html:
+    if old_submit in html:
+        html = html.replace(old_submit, new_submit, 1)
         hc += 1
-        print("  OK — replaced old single-dropdown version")
-
-# ─────────────────────────────────────────────────────────────
-# 6. Update TOOLS entry to include profile_id in creds
-# ─────────────────────────────────────────────────────────────
-print("\n[6] Updating Zernio creds list to include profile_id...")
-
-old_creds = "'zernio':          { label:\"Zernio\",          icon:\"custom-zernio\",      brand:false, color:\"#EB3514\", creds:[\"api_key\",\"account_id\"] },"
-new_creds = "'zernio':          { label:\"Zernio\",          icon:\"custom-zernio\",      brand:false, color:\"#EB3514\", creds:[\"api_key\",\"profile_id\",\"account_id\"] },"
-
-if old_creds in html:
-    html = html.replace(old_creds, new_creds, 1)
-    hc += 1
-    print("  OK — profile_id added to creds list")
-else:
-    print("  WARN — Zernio TOOLS entry not matched exactly")
+        print("  OK — buffer modal added")
 
 with open(HTML, 'w', encoding='utf-8') as f:
     f.write(html)
@@ -449,21 +520,20 @@ fs = open(SERVER, 'r', encoding='utf-8').read()
 fh = open(HTML, 'r', encoding='utf-8').read()
 
 checks = [
-    ("server: POST /v1/posts",           "'https://zernio.com/api/v1/posts'" in fs),
-    ("server: uses profileId",           "'profileId': profile_id," in fs),
-    ("server: uses accountId",           "[{'accountId': account_id}]" in fs),
-    ("server: 409 duplicate handling",   'if r.status_code == 409:' in fs),
-    ("server: 429 rate limit handling",  'if r.status_code == 429:' in fs),
-    ("server: 401 auth error",           'if r.status_code == 401:' in fs),
-    ("server: _zernio_status() helper",  'def _zernio_status(' in fs),
-    ("server: fetches /v1/profiles",     "'https://zernio.com/api/v1/profiles'" in fs),
-    ("server: fetches /v1/accounts",     "'https://zernio.com/api/v1/accounts'" in fs),
-    ("server: injects into ai_chat",     'Zernio status injected' in fs),
-    ("server: /zernio/accounts route",   "@app.route('/zernio/accounts'" in fs),
-    ("html: profile_id in TOOLS",        '"api_key","profile_id","account_id"' in fh),
-    ("html: fetches /zernio/accounts",   "fetch('/zernio/accounts')" in fh),
-    ("html: profile dropdown",           'name="profile_id" class="pro-input"' in fh),
-    ("html: channel dropdown",           'name="account_id" class="pro-input"' in fh),
+    ("server: buffer GraphQL POST",     "'https://api.buffer.com'" in fs),
+    ("server: buffer uses channelId",   '"channelId": channel_id' in fs),
+    ("server: buffer parses mutationError", "if 'message' in result:" in fs),
+    ("server: buffer 401 handling",     "if r.status_code == 401:" in fs),
+    ("server: _buffer_status()",        "def _buffer_status(" in fs),
+    ("server: fetches orgs",            "organizations { id name }" in fs),
+    ("server: fetches channels",        "channels(input: { organizationId" in fs),
+    ("server: /buffer/channels",        "@app.route('/buffer/channels'" in fs),
+    ("server: buffer injection",        "Buffer status injected" in fs),
+    ("server: CONVERSATION PROTOCOL",   "CONVERSATION PROTOCOL" in fs),
+    ("server: 'NEVER output JSON first'","NEVER output JSON as the first response" in fs),
+    ("server: good/bad examples",       "BAD (do NOT do this)" in fs),
+    ("html: buffer in TOOLS",           '"api_key","organization_id","channel_id"' in fh),
+    ("html: buffer modal",              "service === 'buffer'" in fh),
 ]
 
 all_ok = True
@@ -477,14 +547,10 @@ if all_ok:
     print("=" * 60)
     print("PATCH COMPLETE")
     print("=" * 60)
-    print()
-    print("Changes: {} in server.py, {} in index.html".format(sc, hc))
-    print()
+    print(f"\nChanges: {sc} in server.py, {hc} in index.html\n")
     print("Next:")
     print("  git add server.py public/index.html")
-    print("  git commit -m 'Zernio: correct API endpoints, profiles, channels, error handling'")
+    print("  git commit -m 'Buffer GraphQL + conversational AI prompt'")
     print("  git push origin main")
-    print()
-    print("Then follow the setup below to get your IDs.")
 else:
-    print("Review FAIL lines above.")
+    print("Review FAIL lines.")

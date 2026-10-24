@@ -965,12 +965,18 @@ def _gemini_call_with_tools(api_key, system, contents, model_name, max_rounds=5)
 
 
 def tool_buffer(creds, msg, extra):
-    """Post to Buffer via GraphQL API. Requires personal API key from Buffer Settings -> API."""
-    token = creds.get('api_key')
-    channel_id = creds.get('channel_id')  # optional; if omitted, posts to first channel
+    """Post to Buffer via GraphQL API.
+    Requires: api_key, organization_id, channel_id
+    Buffer docs: https://developers.buffer.com/
+    """
+    api_key = creds.get('api_key')
+    org_id = creds.get('organization_id')
+    channel_id = creds.get('channel_id')
 
-    if not token:
-        return "[ERROR] Buffer: api_key not configured (Settings -> API in Buffer)"
+    if not api_key:
+        return "[ERROR] Buffer: api_key not configured (get from publish.buffer.com/settings/api)"
+    if not channel_id:
+        return "[ERROR] Buffer: channel_id not configured (use /buffer/channels to list)"
     if not (msg or '').strip():
         return "[ERROR] Buffer: no content to post"
 
@@ -978,16 +984,19 @@ def tool_buffer(creds, msg, extra):
     if len(text) > 280:
         text = text[:277] + '...'
 
-    query = """
+    mutation = """
     mutation CreatePost($input: CreatePostInput!) {
       createPost(input: $input) {
-        ... on Post {
-          id
-          status
-          channel { id name service }
+        ... on PostActionSuccess {
+          post {
+            id
+            text
+            status
+          }
         }
         ... on MutationError {
           message
+          code
         }
       }
     }
@@ -995,27 +1004,32 @@ def tool_buffer(creds, msg, extra):
 
     variables = {
         "input": {
+            "channelId": channel_id,
             "text": text,
-            "saveToDraft": True,   # safest: creates a draft, user publishes from Buffer
+            "schedulingType": "automatic",
+            "mode": "addToQueue",
         }
     }
-    if channel_id:
-        variables["input"]["channelId"] = channel_id
 
     try:
         r = requests.post(
             'https://api.buffer.com',
             headers={
-                'Authorization': f'Bearer {token}',
+                'Authorization': f'Bearer {api_key}',
                 'Content-Type': 'application/json',
             },
-            json={"query": query, "variables": variables},
+            json={"query": mutation, "variables": variables},
             timeout=20,
         )
     except requests.exceptions.Timeout:
         return "[ERROR] Buffer: timeout (20s)"
     except requests.exceptions.RequestException as e:
         return f"[ERROR] Buffer: network: {e}"
+
+    if r.status_code == 401:
+        return "[ERROR] Buffer: 401 Unauthorized — check API key"
+    if r.status_code >= 500:
+        return f"[ERROR] Buffer: server {r.status_code}"
 
     if r.status_code != 200:
         return f"[ERROR] Buffer {r.status_code}: {r.text[:300]}"
@@ -1025,15 +1039,24 @@ def tool_buffer(creds, msg, extra):
     except Exception:
         return f"[ERROR] Buffer: non-JSON response: {r.text[:200]}"
 
-    if 'errors' in data:
-        return f"[ERROR] Buffer GraphQL: {str(data['errors'])[:300]}"
+    # GraphQL always returns 200 — errors are in the body
+    if 'errors' in data and data['errors']:
+        err_msg = data['errors'][0].get('message', 'unknown')
+        return f"[ERROR] Buffer GraphQL: {err_msg[:200]}"
 
-    post = (data.get('data') or {}).get('createPost') or {}
-    if 'message' in post:
-        return f"[ERROR] Buffer: {post['message']}"
-    post_id = post.get('id', '?')
-    status = post.get('status', 'draft')
-    return f"Buffer 200: {status} (id={post_id})"
+    result = (data.get('data') or {}).get('createPost') or {}
+    
+    # Success case
+    if 'post' in result:
+        post = result['post']
+        return f"Buffer 200: queued (id={post.get('id','?')}, status={post.get('status','?')})"
+
+    # MutationError case
+    if 'message' in result:
+        return f"[ERROR] Buffer: {result['message']}"
+
+    return f"[ERROR] Buffer: unexpected response shape: {str(result)[:200]}"
+
 
 
 def tool_zernio(creds, msg, extra):
@@ -1629,6 +1652,159 @@ def ai_models():
 
 
 
+
+# ═══════════════════════════════════════════════════════════════
+# BUFFER LIVE STATUS — GraphQL query for orgs and channels
+# ═══════════════════════════════════════════════════════════════
+def _buffer_status():
+    result = {
+        "configured": False,
+        "api_key_set": False,
+        "org_id_set": False,
+        "channel_id_set": False,
+        "organizations": [],
+        "channels": [],
+        "current_org": None,
+        "current_channel": None,
+        "error": None,
+    }
+    try:
+        creds = load_creds('buffer') or {}
+    except Exception as e:
+        result["error"] = "load_creds: " + str(e)
+        return result
+
+    api_key = (creds.get('api_key') or '').strip()
+    saved_org = (creds.get('organization_id') or '').strip()
+    saved_channel = (creds.get('channel_id') or '').strip()
+
+    result["api_key_set"] = bool(api_key)
+    result["org_id_set"] = bool(saved_org)
+    result["channel_id_set"] = bool(saved_channel)
+
+    if not api_key:
+        return result
+
+    headers = {
+        "Authorization": "Bearer " + api_key,
+        "Content-Type": "application/json",
+    }
+
+    # Step 1: list organizations
+    try:
+        r = requests.post(
+            'https://api.buffer.com',
+            headers=headers,
+            json={"query": "query { account { organizations { id name } } }"},
+            timeout=10,
+        )
+    except Exception as e:
+        result["error"] = "network: " + str(e)
+        return result
+
+    if r.status_code == 401:
+        result["error"] = "API key invalid (401)"
+        return result
+    if r.status_code != 200:
+        result["error"] = f"HTTP {r.status_code}"
+        return result
+
+    try:
+        data = r.json()
+        orgs = data.get('data', {}).get('account', {}).get('organizations') or []
+        for o in orgs:
+            result["organizations"].append({
+                "id": o.get('id', ''),
+                "name": o.get('name', ''),
+            })
+    except Exception as e:
+        result["error"] = "parse orgs: " + str(e)
+        return result
+
+    # Step 2: if we have an org, list channels
+    target_org = saved_org
+    if not target_org and result["organizations"]:
+        target_org = result["organizations"][0]["id"]
+
+    if target_org:
+        try:
+            r = requests.post(
+                'https://api.buffer.com',
+                headers=headers,
+                json={
+                    "query": "query GetChannels($orgId: String!) { channels(input: { organizationId: $orgId }) { id name service } }",
+                    "variables": {"orgId": target_org},
+                },
+                timeout=10,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                chans = data.get('data', {}).get('channels') or []
+                for c in chans:
+                    result["channels"].append({
+                        "id": c.get('id', ''),
+                        "name": c.get('name', ''),
+                        "service": (c.get('service') or '').lower(),
+                    })
+        except Exception as e:
+            result["error"] = "channels fetch: " + str(e)
+            return result
+
+    result["configured"] = True
+
+    # Match current
+    if saved_org:
+        for o in result["organizations"]:
+            if o["id"] == saved_org:
+                result["current_org"] = o
+                break
+    if saved_channel:
+        for c in result["channels"]:
+            if c["id"] == saved_channel:
+                result["current_channel"] = c
+                break
+
+    return result
+
+
+def _buffer_status_block(status):
+    if not status["api_key_set"]:
+        return (
+            "\n[BUFFER STATUS]\n"
+            "NOT CONFIGURED — no API key. Get one at publish.buffer.com/settings/api\n"
+            "Tell user to configure Credentials → Buffer.\n[END]\n"
+        )
+    if status["error"]:
+        return (
+            "\n[BUFFER STATUS]\n"
+            "API check failed: " + status["error"] + "\n"
+            "Tell user to check API key in Credentials → Buffer.\n[END]\n"
+        )
+
+    lines = ["\n[BUFFER STATUS]"]
+    if status["organizations"]:
+        lines.append("Organizations:")
+        for o in status["organizations"]:
+            marker = " ← current" if status["current_org"] and o["id"] == status["current_org"]["id"] else ""
+            lines.append("  - " + o["name"] + " (id: " + o["id"] + ")" + marker)
+    else:
+        lines.append("No organizations found.")
+
+    if status["channels"]:
+        lines.append("Channels:")
+        for c in status["channels"]:
+            marker = " ← current" if status["current_channel"] and c["id"] == status["current_channel"]["id"] else ""
+            lines.append("  - " + c["service"].title() + ": " + c["name"] + " (id: " + c["id"] + ")" + marker)
+    else:
+        lines.append("No channels connected. User must connect social accounts at publish.buffer.com.")
+
+    lines.append("")
+    lines.append("To post to Buffer, both organization_id and channel_id must be set.")
+    lines.append("Do NOT invent channel IDs. Only use the ones above.")
+    lines.append("[END BUFFER STATUS]\n")
+    return "\n".join(lines)
+
+
 @app.route('/ai-chat', methods=['POST', 'OPTIONS'])
 def ai_chat():
     """Simple Gemini chat proxy — no credentials needed on the client."""
@@ -1641,6 +1817,41 @@ def ai_chat():
     
     system = data.get('system') or (
         "You are the Workflow Pro Architect. Concise, execution-focused.\n\n"
+        "### 🗣 CONVERSATION PROTOCOL — READ FIRST 🗣\n"
+        "You are having a CONVERSATION with a human. Not dumping JSON.\n\n"
+
+        "MANDATORY FLOW for every workflow request:\n"
+        "  1. ACKNOWLEDGE — one short sentence showing you understood\n"
+        "  2. CLARIFY — if anything is ambiguous, ask up to 2 focused questions\n"
+        "     (target channel, content source, data source, delivery method)\n"
+        "  3. CONFIRM — state what you're about to build in plain English\n"
+        "  4. BUILD — output the JSON workflow inside a ```json block\n"
+        "  5. EXPLAIN — 1-2 sentences: what it does, what user must configure\n\n"
+
+        "RULES:\n"
+        "  - NEVER output JSON as the first response. Always talk first.\n"
+        "  - If the request is clear and you have all info → still ACK + CONFIRM,\n"
+        "    then build in the SAME message.\n"
+        "  - If missing info → ASK, do NOT build. Wait for the reply.\n"
+        "  - If the user says 'yes' / 'ok' / 'go' / 'build it' → NOW build.\n"
+        "  - After building, offer: 'Want me to load it, adjust it, or explain it?'\n"
+        "  - For greetings or questions → just answer. NEVER dump JSON for a greeting.\n\n"
+
+        "BAD (do NOT do this):\n"
+        "  User: 'post a quote to zernio'\n"
+        "  AI: [JSON array immediately]\n\n"
+
+        "GOOD:\n"
+        "  User: 'post a quote to zernio'\n"
+        "  AI: 'Happy to. Two quick things: which Zernio channel, and should I fetch\n"
+        "       a random quote or use one you provide?'\n"
+        "  User: 'Facebook, random'\n"
+        "  AI: 'Got it — fetching a random quote, posting to Facebook via Zernio.\n"
+        "       Here's the workflow:' [JSON]\n"
+        "       'You'll need Zernio credentials (api_key + profile_id + account_id)\n"
+        "        already configured in Credentials. Want me to load it?'\n\n"
+
+
 
         "### RULE ZERO - RESEARCH CALLS research() DIRECTLY ###\n"
         "You have ONE tool: `research(query)` - calls private research assistant.\n\n"
@@ -1678,6 +1889,8 @@ def ai_chat():
         "                     ← service = one of: gmail-smtp, discord, slack, telegram,\n"
         "                       notion, google-sheets, twilio-sms, webhook, http-custom,\n"
         "                       buffer, zernio.\n"
+        "                     ← Buffer needs: api_key + organization_id + channel_id\n"
+        "                     ← Zernio needs: api_key + profile_id + account_id\n"
         "                       message = \"\" (empty — auto-inherits previous output).\n"
         "  output/console     data: {}                             (no keys)\n\n"
 
