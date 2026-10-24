@@ -1942,12 +1942,21 @@ LiteGraph.registerNodeType("tool/integration", NodeTool);
 
 // Sync widget values after load
 NodeTool.prototype.onConfigure = function(info) {
+    // Clean any template syntax that a saved workflow might contain
+    function stripTemplates(str) {
+        if (typeof str !== 'string') return str;
+        // Remove ${...} and {{...}} patterns - these aren't supported
+        return str.replace(/\$\{[^}]*\}/g, '').replace(/\{\{[^}]*\}\}/g, '').trim();
+    }
+    
     if (info && info.properties) {
         if (typeof info.properties.service === "string") this.properties.service = info.properties.service;
-        if (typeof info.properties.message === "string") this.properties.message = info.properties.message;
+        if (typeof info.properties.message === "string") this.properties.message = stripTemplates(info.properties.message);
         if (typeof info.properties.platform === "string") this.properties.platform = info.properties.platform;
-        if (typeof info.properties.media_urls === "string") this.properties.media_urls = info.properties.media_urls;
+        if (typeof info.properties.media_urls === "string") this.properties.media_urls = stripTemplates(info.properties.media_urls);
     }
+    
+    // Sync widgets from cleaned properties
     if (this.widgets) {
         for (var i = 0; i < this.widgets.length; i++) {
             var w = this.widgets[i];
@@ -1956,6 +1965,36 @@ NodeTool.prototype.onConfigure = function(info) {
             else if (w.name === "Platform") w.value = this.properties.platform || "instagram";
             else if (w.name === "Media URL (opt)") w.value = this.properties.media_urls || "";
         }
+    }
+};
+
+NodeTool.prototype.onWidgetChanged = function(name, value, widget) {
+    // Strip template syntax as soon as the user types or pastes
+    function stripTemplates(str) {
+        if (typeof str !== 'string') return str;
+        return str.replace(/\$\{[^}]*\}/g, '').replace(/\{\{[^}]*\}\}/g, '').trim();
+    }
+    
+    if (name === "Message (opt)") {
+        var cleaned = stripTemplates(value);
+        if (cleaned !== value) {
+            this.properties.message = cleaned;
+            if (widget) widget.value = cleaned;
+            if (this.graph && this.graph.canvas) this.graph.canvas.setDirty(true, true);
+            if (typeof toast === 'function') toast('Template syntax not supported - removed', 'warn', 2000);
+        }
+    } else if (name === "Media URL (opt)") {
+        var cleaned = stripTemplates(value);
+        if (cleaned !== value) {
+            this.properties.media_urls = cleaned;
+            if (widget) widget.value = cleaned;
+            if (this.graph && this.graph.canvas) this.graph.canvas.setDirty(true, true);
+            if (typeof toast === 'function') toast('Template syntax not supported - removed', 'warn', 2000);
+        }
+    }
+    // Call parent if exists
+    if (LGraphNode.prototype.onWidgetChanged) {
+        return LGraphNode.prototype.onWidgetChanged.apply(this, arguments);
     }
 };
 
@@ -2243,11 +2282,15 @@ function buildPayload() {
             case 'logic/compare': payload.push({type:'compare', data:{operator:d.operator||'>', threshold:Number(d.threshold)||0}}); break;
             case 'logic/json-extract': payload.push({type:'json-extract', data:{path:d.path||''}}); break;
             case 'tool/integration': {
-                const mediaStr = (d.media_urls || '').trim();
-                const mediaList = mediaStr ? mediaStr.split(/[,\n]+/).map(s => s.trim()).filter(Boolean) : [];
+                function stripT(str) {
+                    if (typeof str !== 'string') return str;
+                    return str.replace(/\$\{[^}]*\}/g, '').replace(/\{\{[^}]*\}\}/g, '').trim();
+                }
+                const mediaStr = stripT(d.media_urls || '').trim();
+                const mediaList = mediaStr ? mediaStr.split(/[,\n]+/).map(s => stripT(s.trim())).filter(Boolean) : [];
                 payload.push({type:'tool', data:{
                     service: d.service||'http-custom',
-                    message: d.message||'',
+                    message: stripT(d.message || ''),
                     platform: d.platform||'instagram',
                     media_urls: mediaList
                 }});

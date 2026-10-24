@@ -2,102 +2,154 @@
 import os, shutil, sys, re
 
 PROJECT = r'C:\Users\PC\Desktop\modular\workflow-pro-v3'
-SERVER = os.path.join(PROJECT, 'server.py')
+HTML = os.path.join(PROJECT, 'public', 'index.html')
 
-if not os.path.exists(SERVER):
-    print("FAIL: missing " + SERVER); sys.exit(1)
+if not os.path.exists(HTML):
+    print("FAIL: missing " + HTML); sys.exit(1)
 
-shutil.copy(SERVER, SERVER + '.backup_v10')
+shutil.copy(HTML, HTML + '.backup_v13')
 print("Backed up")
 
-with open(SERVER, 'r', encoding='utf-8') as f:
-    server = f.read()
+hc = 0
 
-sc = 0
+with open(HTML, 'r', encoding='utf-8') as f:
+    html = f.read()
 
 # ============================================================
-# PATCH 1: For image/audio responses, return original URL (no bytes)
+# PATCH 1: Add template sanitizer + hook into NodeTool.onConfigure
 # ============================================================
-print("\n[1] Image/audio responses return URL, not bytes...")
+print("\n[1] Adding template sanitizer to NodeTool...")
 
-# Match the current binary save block. Two variants possible:
-# 1. Post-patch8 (_IS_SERVERLESS present)
-# 2. Original (write_bytes directly)
-# Use a broad regex that catches the whole `if 'audio/' in content_type ...` branch
-pat = re.compile(
-    r"(if 'audio/' in content_type or 'image/' in content_type or 'octet-stream' in content_type:\n)([\s\S]*?)(\n\s{20,28}(?:else:|except |current_memory))",
+# First, check what NodeTool.onConfigure looks like now
+existing_oc = re.search(
+    r'NodeTool\.prototype\.onConfigure\s*=\s*function\(info\)\s*\{[\s\S]*?\n\};',
+    html
 )
 
-m = pat.search(server)
-if not m:
-    print("  FAIL: binary block not found")
+if not existing_oc:
+    print("  FAIL: NodeTool.onConfigure not found")
     sys.exit(1)
 
-# Show what we found
-print("  Found block ({} chars):".format(len(m.group(0))))
-print("  First 200 chars: " + repr(m.group(0)[:200]))
+# Replace the whole onConfigure with a version that sanitizes
+new_oc = '''NodeTool.prototype.onConfigure = function(info) {
+    // Clean any template syntax that a saved workflow might contain
+    function stripTemplates(str) {
+        if (typeof str !== 'string') return str;
+        // Remove ${...} and {{...}} patterns - these aren't supported
+        return str.replace(/\\$\\{[^}]*\\}/g, '').replace(/\\{\\{[^}]*\\}\\}/g, '').trim();
+    }
+    
+    if (info && info.properties) {
+        if (typeof info.properties.service === "string") this.properties.service = info.properties.service;
+        if (typeof info.properties.message === "string") this.properties.message = stripTemplates(info.properties.message);
+        if (typeof info.properties.platform === "string") this.properties.platform = info.properties.platform;
+        if (typeof info.properties.media_urls === "string") this.properties.media_urls = stripTemplates(info.properties.media_urls);
+    }
+    
+    // Sync widgets from cleaned properties
+    if (this.widgets) {
+        for (var i = 0; i < this.widgets.length; i++) {
+            var w = this.widgets[i];
+            if (w.name === "Service") w.value = this.properties.service || "discord";
+            else if (w.name === "Message (opt)") w.value = this.properties.message || "";
+            else if (w.name === "Platform") w.value = this.properties.platform || "instagram";
+            else if (w.name === "Media URL (opt)") w.value = this.properties.media_urls || "";
+        }
+    }
+};'''
 
-# Replace everything inside the `if` block with a one-liner that returns the URL
-new_inner = """                            # Image/audio URL responses: return the URL, do NOT download bytes.
-                            # Instagram/Zernio need URLs. Bytes-in-/tmp breaks on Vercel and
-                            # tool_zernio only accepts URLs anyway.
-                            current_memory = url
-                            logs.append(f"HTTP {r.status_code}: image/audio -> using URL {url[:80]}")
-"""
-
-# Preserve the closing token (m.group(3)) so the else/except/current_memory below still lines up
-server = server[:m.start()] + m.group(1) + new_inner + m.group(3) + server[m.end():]
-sc += 1
-print("  OK: image/audio responses now return URL")
+html = html.replace(existing_oc.group(0), new_oc, 1)
+hc += 1
+print("  OK: onConfigure sanitizes templates")
 
 # ============================================================
-# PATCH 2: For GET requests, capture redirect Location (safer version)
+# PATCH 2: Add onWidgetChanged to strip templates while typing
 # ============================================================
-print("\n[2] Adding GET redirect capture (safer)...")
+print("\n[2] Adding onWidgetChanged to strip templates on typing...")
 
-# Only modify the `requests.request(...)` call — nothing else
-old_req = '                        r = requests.request(method, url, **kwargs)'
-new_req = '''                        # GET: capture redirect location instead of following
-                        if method == 'GET':
-                            kwargs["allow_redirects"] = False
-                        r = requests.request(method, url, **kwargs)
-                        if method == 'GET' and r.status_code in (301, 302, 303, 307, 308):
-                            _loc = r.headers.get('Location', '')
-                            if _loc:
-                                current_memory = _loc
-                                logs.append(f"HTTP {r.status_code}: redirect -> {_loc[:80]}")
-                                continue'''
+# Find NodeTool.onConfigure (which we just replaced) and add onWidgetChanged after it
+# Look for the closing of onConfigure
+oc_end_pattern = re.compile(
+    r'(NodeTool\.prototype\.onConfigure\s*=\s*function\(info\)\s*\{[\s\S]*?\n\};)',
+    re.DOTALL
+)
 
-if old_req in server and 'redirect ->' not in server:
-    server = server.replace(old_req, new_req, 1)
-    sc += 1
-    print("  OK: GET redirects captured")
+m = oc_end_pattern.search(html)
+if m:
+    widget_changed = m.group(1) + '''
+
+NodeTool.prototype.onWidgetChanged = function(name, value, widget) {
+    // Strip template syntax as soon as the user types or pastes
+    function stripTemplates(str) {
+        if (typeof str !== 'string') return str;
+        return str.replace(/\\$\\{[^}]*\\}/g, '').replace(/\\{\\{[^}]*\\}\\}/g, '').trim();
+    }
+    
+    if (name === "Message (opt)") {
+        var cleaned = stripTemplates(value);
+        if (cleaned !== value) {
+            this.properties.message = cleaned;
+            if (widget) widget.value = cleaned;
+            if (this.graph && this.graph.canvas) this.graph.canvas.setDirty(true, true);
+            if (typeof toast === 'function') toast('Template syntax not supported - removed', 'warn', 2000);
+        }
+    } else if (name === "Media URL (opt)") {
+        var cleaned = stripTemplates(value);
+        if (cleaned !== value) {
+            this.properties.media_urls = cleaned;
+            if (widget) widget.value = cleaned;
+            if (this.graph && this.graph.canvas) this.graph.canvas.setDirty(true, true);
+            if (typeof toast === 'function') toast('Template syntax not supported - removed', 'warn', 2000);
+        }
+    }
+    // Call parent if exists
+    if (LGraphNode.prototype.onWidgetChanged) {
+        return LGraphNode.prototype.onWidgetChanged.apply(this, arguments);
+    }
+};'''
+    html = html.replace(m.group(1), widget_changed, 1)
+    hc += 1
+    print("  OK: onWidgetChanged strips templates on typing")
 else:
-    if 'redirect ->' in server:
-        print("  SKIP: redirect capture already present")
-    else:
-        print("  FAIL: requests.request line not found")
-
-with open(SERVER, 'w', encoding='utf-8') as f:
-    f.write(server)
-
-try:
-    compile(open(SERVER, 'r', encoding='utf-8').read(), SERVER, 'exec')
-    print("\n  [OK  ] server.py compiles")
-except SyntaxError as e:
-    print("\n  [FAIL] line {}: {}".format(e.lineno, e.msg))
-    # Show the offending lines
-    lines = open(SERVER, encoding='utf-8').read().splitlines()
-    if e.lineno and e.lineno <= len(lines):
-        start = max(0, e.lineno - 3)
-        end = min(len(lines), e.lineno + 2)
-        print("  Context:")
-        for i in range(start, end):
-            marker = " >>> " if i == e.lineno - 1 else "     "
-            print("  {}L{:4d}: {}".format(marker, i + 1, lines[i]))
-    shutil.copy(SERVER + '.backup_v10', SERVER)
-    print("  Restored from backup")
+    print("  FAIL: could not find onConfigure closing bracket")
     sys.exit(1)
+
+# ============================================================
+# PATCH 3: buildPayload strips templates before sending
+# ============================================================
+print("\n[3] Stripping templates in buildPayload...")
+
+old_bp = re.search(
+    r"case 'tool/integration':\s*\{[\s\S]*?break;\s*\}",
+    html
+)
+
+if not old_bp:
+    print("  FAIL: buildPayload tool case not found")
+    sys.exit(1)
+
+new_bp = '''case 'tool/integration': {
+                function stripT(str) {
+                    if (typeof str !== 'string') return str;
+                    return str.replace(/\\$\\{[^}]*\\}/g, '').replace(/\\{\\{[^}]*\\}\\}/g, '').trim();
+                }
+                const mediaStr = stripT(d.media_urls || '').trim();
+                const mediaList = mediaStr ? mediaStr.split(/[,\\n]+/).map(s => stripT(s.trim())).filter(Boolean) : [];
+                payload.push({type:'tool', data:{
+                    service: d.service||'http-custom',
+                    message: stripT(d.message || ''),
+                    platform: d.platform||'instagram',
+                    media_urls: mediaList
+                }});
+                break;
+            }'''
+
+html = html.replace(old_bp.group(0), new_bp, 1)
+hc += 1
+print("  OK: buildPayload strips templates")
+
+with open(HTML, 'w', encoding='utf-8') as f:
+    f.write(html)
 
 # ============================================================
 # VERIFY
@@ -106,12 +158,14 @@ print("\n" + "=" * 55)
 print("VERIFICATION")
 print("=" * 55)
 
-fs = open(SERVER, 'r', encoding='utf-8').read()
+fh = open(HTML, 'r', encoding='utf-8').read()
 
 checks = [
-    ("image/audio returns URL",   "image/audio -> using URL" in fs),
-    ("GET redirects captured",    "GET and r.status_code in (301, 302" in fs or "redirect ->" in fs),
-    ("no write_bytes for images", "filepath.write_bytes(r.content)" not in fs),
+    ("onConfigure strips templates",       "stripTemplates(info.properties.message)" in fh or "stripTemplates(info.properties.media_urls)" in fh),
+    ("onWidgetChanged exists",             "NodeTool.prototype.onWidgetChanged" in fh),
+    ("buildPayload strips message",        "message: stripT(d.message || '')" in fh),
+    ("buildPayload strips media_urls",     "map(s => stripT(s.trim()))" in fh),
+    ("template removal regex present",     "replace(/\\\\$\\\\{[^}]*\\\\}/g, '')" in fh),
 ]
 
 ok = True
@@ -124,11 +178,11 @@ if ok:
     print("=" * 55)
     print("PATCH COMPLETE")
     print("=" * 55)
-    print("server: {} changes".format(sc))
+    print("html: {} changes".format(hc))
     print()
     print("Next:")
-    print("  git add server.py")
-    print("  git commit -m 'HTTP: URLs not bytes for image/audio'")
+    print("  git add public/index.html")
+    print("  git commit -m 'Tool node: strip {{...}} and ${...} templates everywhere'")
     print("  git push origin main")
 else:
-    print("Review FAIL lines. Backup: server.py.backup_v10")
+    print("Review FAIL lines. Backup: index.html.backup_v13")
