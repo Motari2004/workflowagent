@@ -2002,6 +2002,156 @@ def ai_memory_clear():
             removed += 1
     return jsonify({"ok": True, "removed_files": removed})
 
+# ═══════════════════════════════════════════════════════════════
+# CATCH-UP DISPATCHER
+# Runs a scheduled workflow whenever its scheduled time has
+# passed since last_run_at — even if the dispatcher woke late.
+# ═══════════════════════════════════════════════════════════════
+
+def _cron_matches_minute(cron_expr, dt):
+    """Check if cron expression matches the given minute (UTC)."""
+    try:
+        parts = cron_expr.strip().split()
+        if len(parts) != 5:
+            return False
+
+        def match_field(field, value):
+            if field == '*':
+                return True
+            for item in field.split(','):
+                if '/' in item:
+                    base, step = item.split('/')
+                    step = int(step)
+                    if base == '*':
+                        if value % step == 0:
+                            return True
+                    elif '-' in base:
+                        lo, hi = base.split('-')
+                        if int(lo) <= value <= int(hi) and (value - int(lo)) % step == 0:
+                            return True
+                elif '-' in item:
+                    lo, hi = item.split('-')
+                    if int(lo) <= value <= int(hi):
+                        return True
+                elif int(item) == value:
+                    return True
+            return False
+
+        minute, hour, day, month, weekday = parts
+        cron_wd = (dt.weekday() + 1) % 7
+
+        return (
+            match_field(minute, dt.minute) and
+            match_field(hour, dt.hour) and
+            match_field(day, dt.day) and
+            match_field(month, dt.month) and
+            match_field(weekday, cron_wd)
+        )
+    except Exception as e:
+        print("[cron] parse error '{}': {}".format(cron_expr, e))
+        return False
+
+
+def _find_most_recent_slot(cron_expr, now):
+    """Scan backwards from now and return the most recent matching minute.
+    Returns None if no slot found within 40 days.
+    """
+    from datetime import timedelta
+    current = now.replace(second=0, microsecond=0)
+    max_iterations = 60 * 24 * 40
+    iterations = 0
+    while iterations < max_iterations:
+        if _cron_matches_minute(cron_expr, current):
+            return current
+        current -= timedelta(minutes=1)
+        iterations += 1
+    return None
+
+
+@app.route('/cron/tick', methods=['POST', 'GET'])
+def cron_tick():
+    """Catch-up dispatcher.
+
+    For each workflow with mode=scheduled:
+      1. Find the most recent scheduled slot (<= now)
+      2. If that slot is AFTER last_run_at → we missed it → run now
+      3. Otherwise → already ran for that slot → skip
+    """
+    from datetime import datetime as _dt, timedelta
+    now_utc = _dt.utcnow().replace(second=0, microsecond=0)
+
+    # Load all workflows
+    if USE_DB:
+        rows = _db_all("SELECT name, payload FROM workflows")
+        all_wfs = [(r["name"], r["payload"] or {}) for r in rows]
+    else:
+        all_wfs = []
+        for p in DATA_DIR.glob("*.json"):
+            try:
+                data = json.loads(p.read_text(encoding='utf-8'))
+                all_wfs.append((p.stem, data))
+            except Exception:
+                continue
+
+    ran, skipped, errors = [], [], []
+
+    for name, payload in all_wfs:
+        if payload.get("mode") != "scheduled":
+            continue
+        schedule = (payload.get("schedule") or "").strip()
+        if not schedule:
+            continue
+
+        # Parse last_run_at (default: now - 24h so first tick catches today's slot)
+        last_run_str = payload.get("last_run_at")
+        if last_run_str:
+            try:
+                last_run = _dt.fromisoformat(last_run_str.replace("Z", ""))
+            except Exception:
+                last_run = now_utc - timedelta(hours=24)
+        else:
+            last_run = now_utc - timedelta(hours=24)
+
+        # Find most recent scheduled slot
+        slot = _find_most_recent_slot(schedule, now_utc)
+        if slot is None:
+            skipped.append(name)
+            continue
+
+        # Run if that slot is AFTER last_run (we haven't run for it yet)
+        if last_run < slot:
+            try:
+                wf = load_workflow(name)
+                result = execute_workflow(wf.get("nodes", []))
+                log_execution(name, "cron", result)
+
+                # Update last_run_at
+                wf_payload = wf or {}
+                wf_payload["last_run_at"] = now_utc.isoformat() + "Z"
+                save_workflow(name, wf_payload)
+
+                delay = int((now_utc - slot).total_seconds() / 60)
+                ran.append({
+                    "name": name,
+                    "slot": slot.isoformat() + "Z",
+                    "delay_minutes": delay,
+                })
+                print("[cron] ran {} (slot {}, {}min late)".format(
+                    name, slot.strftime("%Y-%m-%d %H:%M"), delay))
+            except Exception as e:
+                errors.append({"name": name, "error": str(e)})
+                print("[cron] error {}: {}".format(name, e))
+        else:
+            skipped.append(name)
+
+    return jsonify({
+        "checked_at": now_utc.isoformat() + "Z",
+        "ran": ran,
+        "skipped": skipped,
+        "errors": errors,
+    })
+
+
 if __name__ == '__main__':
     print("\n=======================================")
     print("WORKFLOW PRO ENGINE v5.0 — 20 TOOLS")
