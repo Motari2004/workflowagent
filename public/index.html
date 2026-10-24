@@ -2163,7 +2163,7 @@ async function run() {
     log.innerHTML = '<div class="log-entry info">Sending...</div>';
     try {
         const wfName = document.getElementById('workflowName').value.trim() || 'manual';
-        const res = await fetch('http://localhost:10000/run', {
+        const res = await fetch('/run', {
             method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({nodes:payload, workflow_name:wfName}),
         });
@@ -2399,7 +2399,7 @@ function triggerAutosave() {
         };
 
         try {
-            const res = await fetch(`http://localhost:10000/workflows/${encodeURIComponent(name)}`, {
+            const res = await fetch(`/workflows/${encodeURIComponent(name)}`, {
                 method:'PUT', headers:{'Content-Type':'application/json'},
                 body: JSON.stringify(payload),
             });
@@ -2500,7 +2500,7 @@ function promptRenameWorkflow() {
         if (!newName || newName === currentName) { overlay.remove(); return; }
 
         try {
-            const res = await fetch(`http://localhost:10000/workflows/${encodeURIComponent(currentName)}/rename`, {
+            const res = await fetch(`/workflows/${encodeURIComponent(currentName)}/rename`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ new_name: newName })
@@ -2543,7 +2543,7 @@ async function saveCurrentWorkflow() {
     };
 
     try {
-        const res = await fetch(`http://localhost:10000/workflows/${encodeURIComponent(name)}`, {
+        const res = await fetch(`/workflows/${encodeURIComponent(name)}`, {
             method:'PUT', headers:{'Content-Type':'application/json'},
             body: JSON.stringify(payload),
         });
@@ -2562,7 +2562,7 @@ async function saveCurrentWorkflow() {
 
 async function refreshWorkflowList() {
     try {
-        const res = await fetch('http://localhost:10000/workflows');
+        const res = await fetch('/workflows');
         const data = await res.json();
         const selector = document.getElementById('workflowSelector');
         const currentVal = selector.value;
@@ -2591,7 +2591,7 @@ async function loadWorkflowFromSelector(name) {
 
     confirmLoadWorkflow(name, async () => {
         try {
-            const res = await fetch(`http://localhost:10000/workflows/${encodeURIComponent(name)}`);
+            const res = await fetch(`/workflows/${encodeURIComponent(name)}`);
             if (!res.ok) throw new Error("Workflow not found");
             
             const data = await res.json();
@@ -2625,7 +2625,7 @@ async function scheduleCurrentWorkflow() {
     const name = document.getElementById('workflowName').value.trim();
     if (!name) { toast('Enter workflow name','error'); return; }
     if (!await saveCurrentWorkflow()) return;
-    const res = await fetch(`http://localhost:10000/schedule/${encodeURIComponent(name)}`, {
+    const res = await fetch(`/schedule/${encodeURIComponent(name)}`, {
         method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({interval_seconds:60}),
     });
     const data = await res.json();
@@ -2635,7 +2635,7 @@ async function showWebhookUrl() {
     const name = document.getElementById('workflowName').value.trim();
     if (!name) { toast('Enter workflow name','error'); return; }
     if (!await saveCurrentWorkflow()) return;
-    const url = `http://localhost:10000/webhook/${encodeURIComponent(name)}`;
+    const url = `/webhook/${encodeURIComponent(name)}`;
     document.getElementById('log').innerHTML = `
         <div class="log-entry success">
             <div class="font-bold mb-2">Webhook URL for "${name}":</div>
@@ -2647,7 +2647,7 @@ async function showWebhookUrl() {
 async function showExecutions() {
     const name = document.getElementById('workflowName').value.trim();
     if (!name) { toast('Enter workflow name','error'); return; }
-    const res = await fetch(`http://localhost:10000/executions/${encodeURIComponent(name)}?limit=20`);
+    const res = await fetch(`/executions/${encodeURIComponent(name)}?limit=20`);
     const data = await res.json();
     const log = document.getElementById('log');
     log.innerHTML = '';
@@ -2667,7 +2667,7 @@ async function showExecutions() {
 // Credentials panel
 async function openCredentialsPanel() {
     try {
-        const res = await fetch('http://localhost:10000/credentials');
+        const res = await fetch('/credentials');
         const data = res.ok ? await res.json() : { configured: [] };
         const configured = new Set(data.configured || []);
 
@@ -2724,7 +2724,7 @@ async function openEditCredsModal(service) {
         // Fetch existing credentials (safe — 404 returns empty object)
         let existing = {};
         try {
-            const r = await fetch(`http://localhost:10000/credentials/${service}`);
+            const r = await fetch(`/credentials/${service}`);
             if (r.ok) existing = await r.json();
         } catch (_) { /* not configured yet — that's fine */ }
 
@@ -2763,7 +2763,7 @@ async function openEditCredsModal(service) {
             const creds = {};
             tool.creds.forEach(k => { creds[k] = form.elements[k].value; });
             try {
-                const res = await fetch(`http://localhost:10000/credentials/${service}`, {
+                const res = await fetch(`/credentials/${service}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(creds),
@@ -2817,7 +2817,7 @@ setTimeout(async () => {
     const lastLoaded = localStorage.getItem('workflow_last_loaded');
     if (lastLoaded) {
         try {
-            const res = await fetch(`http://localhost:10000/workflows/${encodeURIComponent(lastLoaded)}`);
+            const res = await fetch(`/workflows/${encodeURIComponent(lastLoaded)}`);
             if (res.ok) {
                 const data = await res.json();
                 if (data.graph) {
@@ -2971,7 +2971,7 @@ document.getElementById('codeSaveBtn').addEventListener('click', () => {
         const sampleInput = prompt('Test input (the value your code will receive):', 'Current BTC Price: $82,500.00') || 'Current BTC Price: $82,500.00';
         
         try {
-            const res = await fetch('http://localhost:10000/test-code', {
+            const res = await fetch('/test-code', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
@@ -3395,7 +3395,7 @@ console.log("=== SCRIPT READY ===");
         const thinking = appendThinking();
         
         try {
-            const res = await fetch('http://localhost:10000/ai-chat', {
+            const res = await fetch('/ai-chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -3500,7 +3500,7 @@ console.log("=== SCRIPT READY ===");
     async function loadModels() {
         if (!modelSelector) return;
         try {
-            const res = await fetch('http://localhost:10000/ai-models');
+            const res = await fetch('/ai-models');
             const data = await res.json();
             modelSelector.innerHTML = '';
             data.models.forEach(m => {
