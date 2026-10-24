@@ -1,186 +1,36 @@
 from flask import Flask, request, jsonify, send_from_directory, make_response
 from flask_cors import CORS
 import requests
+# ============================================================
+# NEON POSTGRES — direct connections (no psycopg_pool dependency)
+# ============================================================
 try:
     import psycopg
     from psycopg.rows import dict_row
-    from psycopg_pool import ConnectionPool
     _HAS_PSYCOPG = True
-except ImportError:
+except ImportError as _ie:
     psycopg = None
     dict_row = None
-    ConnectionPool = None
     _HAS_PSYCOPG = False
+    print(f"[db] psycopg import failed: {_ie}")
 
-from dotenv import load_dotenv
-import os as _os
-load_dotenv()  # loads .env from the current directory
-
-import json
-import time
-import uuid
-import threading
-import re
-from datetime import datetime
-from pathlib import Path
-import os
-
-app = Flask(__name__)
-
-# ============================================================
-# Available AI models for the assistant panel
-# ============================================================
-AVAILABLE_MODELS = {
-    # Gemini models — all support Google Search grounding
-    'gemini-flash-25':  {'provider': 'gemini', 'model': 'gemini-2.5-flash',          'label': 'Gemini 2.5 Flash'},
-    'gemini-pro-25':    {'provider': 'gemini', 'model': 'gemini-2.5-pro',            'label': 'Gemini 2.5 Pro'},
-    'gemini-flash-31':  {'provider': 'gemini', 'model': 'gemini-3.1-pro-preview',    'label': 'Gemini 3.1 Pro (Preview)'},
-    'gemini-flash-35':  {'provider': 'gemini', 'model': 'gemini-3.5-flash',          'label': 'Gemini 3.5 Flash'},
-    'gemini-flash-38':  {'provider': 'gemini', 'model': 'gemini-3.8-flash',          'label': 'Gemini 3.8 Flash'},
-
-    # Ollama models (no internet access)
-    'ollama-gpt':       {'provider': 'ollama', 'model': 'gpt-oss:120b',               'label': 'Ollama GPT (no internet)'},
-    'ollama-gemma':     {'provider': 'ollama', 'model': 'gemma4:31b-cloud',           'label': 'Ollama Gemma 4 (no internet)'},
-}
-
-# ============================================================
-# AI model helpers — used by /ai-chat
-# ============================================================
-
-def _gemini_call(api_key, system, contents, model_name='gemini-flash-latest', max_retries=2, use_search=False):
-    """Call Gemini API with retry logic. Optional Google Search grounding."""
-    import time
-    for attempt in range(max_retries):
-        try:
-            payload = {
-                "systemInstruction": {"parts": [{"text": system}]},
-                "contents": contents,
-                "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1024}
-            }
-            if use_search:
-                payload["tools"] = [{"google_search": {}}]
-            
-            r = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}",
-                headers={"Content-Type": "application/json"},
-                json=payload,
-                timeout=60
-            )
-            if r.status_code == 200:
-                try:
-                    return r.json()['candidates'][0]['content']['parts'][0]['text']
-                except (KeyError, IndexError):
-                    print(f"[gemini] Unexpected response shape: {r.text[:200]}")
-                    return None
-            elif r.status_code == 503:
-                print(f"[gemini] 503 overloaded (attempt {attempt + 1})")
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
-                    continue
-                return None
-            else:
-                print(f"[gemini] Error {r.status_code}: {r.text[:300]}")
-                return None
-        except requests.exceptions.Timeout:
-            print(f"[gemini] Timeout (attempt {attempt + 1})")
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
-                continue
-            return None
-        except Exception as e:
-            print(f"[gemini] Exception: {e}")
-            return None
-    return None
-
-
-def _ollama_call(message, system, model_override=None):
-    """Call Ollama Cloud API."""
-    api_key = _os.environ.get('OLLAMA_API_KEY')
-    host = _os.environ.get('OLLAMA_HOST', 'https://ollama.com')
-    model = model_override or _os.environ.get('OLLAMA_MODEL', 'gemma4:31b')
-
-    # Fallback to credentials file if .env not set
-    if not api_key:
-        try:
-            c = load_creds('ollama')
-            if c:
-                api_key = c.get('api_key')
-                host = c.get('host', host)
-                model = model_override or c.get('model', model)
-        except Exception:
-            pass
-
-    if not api_key:
-        print("[ollama] No API key configured")
-        return None
-
-    try:
-        r = requests.post(
-            f"{host}/api/chat",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": message}
-                ],
-                "stream": False
-            },
-            timeout=60
-        )
-        if r.status_code == 200:
-            return r.json().get('message', {}).get('content', '')
-        else:
-            print(f"[ollama] Error {r.status_code}: {r.text[:300]}")
-            return None
-    except Exception as e:
-        print(f"[ollama] Exception: {e}")
-        return None
-
-
-
-CORS(app, resources={r"/*": {"origins": "*"}})
-
-@app.after_request
-def add_cors_headers(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', '*')
-    response.headers.add('Access-Control-Allow-Methods', '*')
-    return response
-
-SYMBOL_MAP = {'bitcoin':'BTC','ethereum':'ETH','solana':'SOL','binancecoin':'BNB','cardano':'ADA','ripple':'XRP','dogecoin':'DOGE'}
-
-
-
-
-
-
-
-
-# ============================================================
-# STORAGE — Postgres (Neon) when DATABASE_URL is set, else local files
-# ============================================================
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+
+print(f"[db] DATABASE_URL present: {bool(DATABASE_URL)} (len={len(DATABASE_URL)})")
+print(f"[db] psycopg available: {_HAS_PSYCOPG}")
+
 USE_DB = bool(DATABASE_URL) and _HAS_PSYCOPG
 
-_pool = None
+# Quick connection test so boot logs are honest
 if USE_DB:
     try:
-        _pool = ConnectionPool(
-            conninfo=DATABASE_URL,
-            min_size=1,
-            max_size=4,
-            timeout=10,
-            kwargs={"autocommit": True, "row_factory": dict_row},
-        )
-        print("[db] Neon Postgres pool ready")
+        _test = psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True, connect_timeout=10)
+        _test.close()
+        print("[db] Neon connection OK")
     except Exception as _e:
-        print(f"[db] Pool init failed: {_e} — falling back to local files")
-        _pool = None
+        print(f"[db] Connection failed: {_e}")
         USE_DB = False
+
 
 # Legacy filesystem paths (only used when USE_DB is False, e.g. local dev)
 _IS_SERVERLESS = bool(
@@ -217,61 +67,72 @@ print(f"[storage] mode={'postgres' if USE_DB else 'filesystem'} base={_BASE.reso
 # Schema bootstrap — safe to run every boot
 # ============================================================
 def _db_init_schema():
-    if not USE_DB or _pool is None:
+    if not USE_DB:
         return
     try:
-        with _pool.connection() as conn, conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS workflows (
-                    name        TEXT PRIMARY KEY,
-                    payload     JSONB NOT NULL,
-                    updated_at  TIMESTAMPTZ DEFAULT NOW()
-                );
-                CREATE TABLE IF NOT EXISTS credentials (
-                    service     TEXT PRIMARY KEY,
-                    payload     JSONB NOT NULL,
-                    updated_at  TIMESTAMPTZ DEFAULT NOW()
-                );
-                CREATE TABLE IF NOT EXISTS execution_logs (
-                    id          BIGSERIAL PRIMARY KEY,
-                    workflow    TEXT NOT NULL,
-                    source      TEXT NOT NULL,
-                    status      TEXT,
-                    result      JSONB,
-                    logs        JSONB,
-                    created_at  TIMESTAMPTZ DEFAULT NOW()
-                );
-                CREATE INDEX IF NOT EXISTS idx_exec_wf_created
-                    ON execution_logs(workflow, created_at DESC);
-                CREATE TABLE IF NOT EXISTS memory_messages (
-                    id          BIGSERIAL PRIMARY KEY,
-                    created_at  TIMESTAMPTZ DEFAULT NOW(),
-                    role        TEXT NOT NULL,
-                    text        TEXT NOT NULL,
-                    session_id  TEXT
-                );
-                CREATE INDEX IF NOT EXISTS idx_mem_created
-                    ON memory_messages(created_at DESC);
-                CREATE TABLE IF NOT EXISTS memory_facts (
-                    key         TEXT PRIMARY KEY,
-                    value       JSONB,
-                    updated_at  TIMESTAMPTZ DEFAULT NOW()
-                );
-            """)
-        print("[db] schema ensured")
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True, connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS workflows (
+                        name TEXT PRIMARY KEY,
+                        payload JSONB NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS credentials (
+                        service TEXT PRIMARY KEY,
+                        payload JSONB NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS execution_logs (
+                        id BIGSERIAL PRIMARY KEY,
+                        workflow TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        status TEXT,
+                        result TEXT,
+                        logs JSONB,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_exec_wf_created
+                        ON execution_logs(workflow, created_at DESC);
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS memory_messages (
+                        id BIGSERIAL PRIMARY KEY,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        role TEXT NOT NULL,
+                        text TEXT NOT NULL,
+                        session_id TEXT
+                    );
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_mem_created
+                        ON memory_messages(created_at DESC);
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS memory_facts (
+                        key TEXT PRIMARY KEY,
+                        value JSONB,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                """)
+        print("[db] Schema ready")
     except Exception as e:
-        print(f"[db] schema init failed: {e}")
-
-_db_init_schema()
+        print(f"[db] Schema init failed: {e}")
 
 
 def _db_exec(query, params=None):
-    """Execute a write query. Returns True on success."""
-    if not USE_DB or _pool is None:
+    if not USE_DB:
         return False
     try:
-        with _pool.connection() as conn, conn.cursor() as cur:
-            cur.execute(query, params or ())
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True, connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params or ())
         return True
     except Exception as e:
         print(f"[db] exec failed: {e}")
@@ -279,149 +140,30 @@ def _db_exec(query, params=None):
 
 
 def _db_one(query, params=None):
-    """Fetch one row as dict, or None."""
-    if not USE_DB or _pool is None:
+    if not USE_DB:
         return None
     try:
-        with _pool.connection() as conn, conn.cursor() as cur:
-            cur.execute(query, params or ())
-            return cur.fetchone()
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True, connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params or ())
+                return cur.fetchone()
     except Exception as e:
         print(f"[db] query failed: {e}")
         return None
 
 
 def _db_all(query, params=None):
-    """Fetch all rows as list of dicts."""
-    if not USE_DB or _pool is None:
+    if not USE_DB:
         return []
     try:
-        with _pool.connection() as conn, conn.cursor() as cur:
-            cur.execute(query, params or ())
-            return cur.fetchall() or []
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True, connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params or ())
+                return cur.fetchall() or []
     except Exception as e:
         print(f"[db] query failed: {e}")
         return []
 
-
-
-
-
-
-
-def memory_save_message(role, text, session_id=None):
-    """Append one message to memory."""
-    from datetime import datetime as _dt
-    text = (text or "")[:5000]
-    if USE_DB:
-        _db_exec(
-            """INSERT INTO memory_messages (role, text, session_id)
-               VALUES (%s, %s, %s)""",
-            (role, text, session_id or "default")
-        )
-        return {"ts": _dt.utcnow().isoformat() + "Z", "role": role,
-                "text": text, "session_id": session_id or "default"}
-    today = _dt.utcnow().strftime("%Y-%m-%d")
-    path = SESSIONS_DIR / f"{today}.jsonl"
-    entry = {"ts": _dt.utcnow().isoformat() + "Z", "role": role,
-             "text": text, "session_id": session_id or "default"}
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
-    return entry
-
-def memory_recent(hours=24, limit=30):
-    """Load messages from the last N hours."""
-    from datetime import datetime as _dt, timedelta
-    if USE_DB:
-        rows = _db_all(
-            """SELECT created_at AS ts, role, text, session_id
-               FROM memory_messages
-               WHERE created_at > NOW() - INTERVAL '%s hours'
-               ORDER BY created_at ASC LIMIT %s""",
-            (int(hours), int(limit))
-        )
-        for r in rows:
-            if r.get("ts"): r["ts"] = r["ts"].isoformat() + "Z"
-        return rows
-    cutoff = _dt.utcnow() - timedelta(hours=hours)
-    messages = []
-    for p in sorted(SESSIONS_DIR.glob("*.jsonl"), reverse=True):
-        try:
-            for line in p.read_text(encoding="utf-8").splitlines()[-200:]:
-                if not line.strip(): continue
-                try:
-                    entry = json.loads(line)
-                    ts = _dt.fromisoformat(entry["ts"].replace("Z", ""))
-                    if ts >= cutoff:
-                        messages.append(entry)
-                except Exception:
-                    continue
-        except Exception:
-            continue
-    messages.sort(key=lambda m: m["ts"])
-    return messages[-limit:]
-
-def memory_load_facts():
-    """Load long-term facts (name, preferences, etc)."""
-    if USE_DB:
-        rows = _db_all("SELECT key, value FROM memory_facts")
-        facts = {r["key"]: r["value"] for r in rows}
-        return {
-            "name": facts.get("name"),
-            "preferences": facts.get("preferences", []) if isinstance(facts.get("preferences"), list) else [],
-            "projects": facts.get("projects", []) if isinstance(facts.get("projects"), list) else [],
-        }
-    if FACTS_FILE.exists():
-        try:
-            return json.loads(FACTS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {"name": None, "preferences": [], "projects": []}
-
-def memory_save_fact(key, value):
-    """Save a fact to remember forever."""
-    if USE_DB:
-        _db_exec(
-            """INSERT INTO memory_facts (key, value, updated_at)
-               VALUES (%s, %s::jsonb, NOW())
-               ON CONFLICT (key) DO UPDATE SET
-                 value = EXCLUDED.value, updated_at = NOW()""",
-            (key, json.dumps(value))
-        )
-        return memory_load_facts()
-    facts = memory_load_facts()
-    facts[key] = value
-    FACTS_FILE.write_text(json.dumps(facts, indent=2), encoding="utf-8")
-    return facts
-
-def memory_build_context():
-    """Build the system prompt memory block."""
-    facts = memory_load_facts()
-    recent = memory_recent(hours=48, limit=20)
-
-    parts = []
-    if facts.get("name"):
-        parts.append(f"User's name: {facts['name']}")
-    if facts.get("preferences"):
-        parts.append("User preferences: " + "; ".join(facts["preferences"]))
-    if facts.get("projects"):
-        parts.append("Active projects: " + "; ".join(facts["projects"]))
-
-    if recent:
-        parts.append("\nRECENT CONVERSATION:")
-        for m in recent[-10:]:
-            role = "User" if m["role"] == "user" else "AI"
-            parts.append(f"{role}: {m['text'][:200]}")
-
-    if not parts:
-        return ""
-
-    return "\n\nMEMORY (things you know about this user):\n" + "\n".join(parts)
-
-
-
-_schedulers = {}
-_scheduler_lock = threading.Lock()
 
 # ---------- Workflow storage ----------
 def save_workflow(name, wf):
