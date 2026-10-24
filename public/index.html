@@ -1926,7 +1926,7 @@ NodeJsonExtract.prototype.onConfigure = function(info) {
 };
 
 function NodeTool() {
-    this.properties = { service:"discord", message:"", platform:"instagram" };
+    this.properties = { service:"discord", message:"", platform:"instagram", media_urls:"" };
     this.addInput("in","string"); this.addOutput("out","string");
     const names = Object.keys(TOOLS);
     this.addWidget("combo","Service","discord", v => this.properties.service = v, { values:names });
@@ -1934,6 +1934,7 @@ function NodeTool() {
     this.platformWidget = this.addWidget("combo","Platform","instagram", v => this.properties.platform = v, {
         values: ["instagram","facebook","tiktok","twitter","linkedin","threads","pinterest","youtube","reddit","bluesky","telegram","snapchat","whatsapp","discord","slack"]
     });
+    this.mediaWidget = this.addWidget("text","Media URL (opt)","", v => this.properties.media_urls = v);
     this.title = "Tool";
     applyNodeTheme(this, NODE_THEME.tool);
 }
@@ -1945,6 +1946,7 @@ NodeTool.prototype.onConfigure = function(info) {
         if (typeof info.properties.service === "string") this.properties.service = info.properties.service;
         if (typeof info.properties.message === "string") this.properties.message = info.properties.message;
         if (typeof info.properties.platform === "string") this.properties.platform = info.properties.platform;
+        if (typeof info.properties.media_urls === "string") this.properties.media_urls = info.properties.media_urls;
     }
     if (this.widgets) {
         for (var i = 0; i < this.widgets.length; i++) {
@@ -1952,6 +1954,7 @@ NodeTool.prototype.onConfigure = function(info) {
             if (w.name === "Service") w.value = this.properties.service || "discord";
             else if (w.name === "Message (opt)") w.value = this.properties.message || "";
             else if (w.name === "Platform") w.value = this.properties.platform || "instagram";
+            else if (w.name === "Media URL (opt)") w.value = this.properties.media_urls || "";
         }
     }
 };
@@ -2239,7 +2242,17 @@ function buildPayload() {
             case 'logic/math': payload.push({type:'math', data:{op:d.op||'multiply', value:Number(d.value)||1}}); break;
             case 'logic/compare': payload.push({type:'compare', data:{operator:d.operator||'>', threshold:Number(d.threshold)||0}}); break;
             case 'logic/json-extract': payload.push({type:'json-extract', data:{path:d.path||''}}); break;
-            case 'tool/integration': payload.push({type:'tool', data:{service:d.service||'http-custom', message:d.message||'', platform:d.platform||'instagram'}}); break;
+            case 'tool/integration': {
+                const mediaStr = (d.media_urls || '').trim();
+                const mediaList = mediaStr ? mediaStr.split(/[,\n]+/).map(s => s.trim()).filter(Boolean) : [];
+                payload.push({type:'tool', data:{
+                    service: d.service||'http-custom',
+                    message: d.message||'',
+                    platform: d.platform||'instagram',
+                    media_urls: mediaList
+                }});
+                break;
+            }
             case 'action/http': payload.push({type:'http-request', data:{
                 url: d.url || '',
                 method: d.method || 'GET',

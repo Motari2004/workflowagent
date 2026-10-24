@@ -1061,7 +1061,8 @@ def tool_buffer(creds, msg, extra):
 
 def tool_zernio(creds, msg, extra):
     """Post to Zernio. Requires api_key (sk_...) and account_id.
-    platform comes from extra (node data) - defaults to instagram.
+    platform: instagram | facebook | tiktok | twitter | linkedin | threads | etc.
+    media_urls: list of image/video URLs (REQUIRED for Instagram).
     """
     token = creds.get("api_key")
     account_id = creds.get("account_id")
@@ -1091,7 +1092,27 @@ def tool_zernio(creds, msg, extra):
             "Must be one of: " + ", ".join(sorted(valid_platforms))
         )
 
+    # Media URLs - required for Instagram, optional elsewhere
+    media_urls = (extra or {}).get("media_urls") or []
+    if isinstance(media_urls, str):
+        media_urls = [media_urls]
+    media_urls = [u for u in media_urls if u and u.strip()]
+
+    if platform == "instagram" and not media_urls:
+        return "[ERROR] Zernio: Instagram requires at least one image or video URL (media_urls)"
+
     text = msg.strip()
+
+    payload = {
+        "content": text,
+        "publishNow": True,
+        "platform": platform,
+        "platforms": [{"accountId": account_id, "platform": platform}],
+    }
+    if media_urls:
+        payload["mediaUrls"] = media_urls
+        payload["media_urls"] = media_urls
+        payload["media"] = [{"url": u, "type": "image"} for u in media_urls]
 
     try:
         r = requests.post(
@@ -1100,12 +1121,7 @@ def tool_zernio(creds, msg, extra):
                 "Authorization": "Bearer " + token,
                 "Content-Type": "application/json",
             },
-            json={
-                "content": text,
-                "publishNow": True,
-                "platform": platform,
-                "platforms": [{"accountId": account_id, "platform": platform}],
-            },
+            json=payload,
             timeout=20,
         )
     except requests.exceptions.Timeout:
@@ -1117,7 +1133,8 @@ def tool_zernio(creds, msg, extra):
         try:
             data = r.json()
             post_id = data.get("_id") or data.get("id", "?")
-            return "Zernio " + str(r.status_code) + ": posted to " + platform + " (id=" + str(post_id) + ")"
+            media_note = " with " + str(len(media_urls)) + " media" if media_urls else ""
+            return "Zernio " + str(r.status_code) + ": posted to " + platform + media_note + " (id=" + str(post_id) + ")"
         except Exception:
             return "Zernio " + str(r.status_code) + ": posted to " + platform
 
@@ -1398,6 +1415,10 @@ def execute_workflow(nodes, extra_input=None):
                         tool_extra.update(node_data['config'])
                     if node_data.get('platform'):
                         tool_extra['platform'] = node_data['platform']
+                    if node_data.get('media_urls'):
+                        tool_extra['media_urls'] = node_data['media_urls']
+                    if node_data.get('mediaUrls'):
+                        tool_extra['media_urls'] = node_data['mediaUrls']
                     result = handler(creds, msg, tool_extra)
                     current_memory = result
                     logs.append(result)
@@ -1849,210 +1870,110 @@ def ai_chat():
     history = data.get('history') or []
     
     system = data.get('system') or (
-        "You are the Workflow Pro Architect. Concise, execution-focused.\n\n"
-        "### 🗣 CONVERSATION PROTOCOL — READ FIRST 🗣\n"
-        "You are having a CONVERSATION with a human. Not dumping JSON.\n\n"
+        "You are a workflow builder for WorkflowPro automation tool. "
+        "Your PRIMARY job is to produce working workflow JSON quickly. "
+        "Users get frustrated by repeated questions. "
+        "When in doubt, BUILD."
+        "\n\n"
 
-        "MANDATORY FLOW for every workflow request:\n"
-        "  1. ACKNOWLEDGE — one short sentence showing you understood\n"
-        "  2. CLARIFY — if anything is ambiguous, ask up to 2 focused questions\n"
-        "     (target channel, content source, data source, delivery method)\n"
-        "  3. CONFIRM — state what you're about to build in plain English\n"
-        "  4. BUILD — output the JSON workflow inside a ```json block\n"
-        "  5. EXPLAIN — 1-2 sentences: what it does, what user must configure\n\n"
+        "### CONVERSATION MEMORY - READ BEFORE RESPONDING ###"
+        "\n"
+        "The full chat history is in the `contents` array. Read EVERY turn "
+        "before responding. If the user already answered a question, "
+        "DO NOT ask it again.\n\n"
 
-        "RULES:\n"
-        "  - NEVER output JSON as the first response. Always talk first.\n"
-        "  - If the request is clear and you have all info → still ACK + CONFIRM,\n"
-        "    then build in the SAME message.\n"
-        "  - If missing info → ASK, do NOT build. Wait for the reply.\n"
-        "  - If the user says 'yes' / 'ok' / 'go' / 'build it' → NOW build.\n"
-        "  - After building, offer: 'Want me to load it, adjust it, or explain it?'\n"
-        "  - For greetings or questions → just answer. NEVER dump JSON for a greeting.\n\n"
+        "### BUILD-OR-ASK DECISION TREE ###"
+        "\n"
+        "TRIGGER TO BUILD IMMEDIATELY (no clarifying questions):"
+        "  - User said: yes / ok / build / go / do it / just build / proceed"
+        "  - User already answered the last question you asked"
+        "  - User said: do whatever / your call / you decide / fine as you wish"
+        "  - You have enough info to make reasonable defaults"
+        "\n"
+        "TRIGGER TO ASK: Only when genuinely blocked - e.g. you have ZERO "
+        "information about what the user wants. If you can infer a sensible "
+        "default, BUILD.\n\n"
 
-        "BAD (do NOT do this):\n"
-        "  User: 'post a quote to zernio'\n"
-        "  AI: [JSON array immediately]\n\n"
+        "### ASK AT MOST ONE QUESTION PER TURN ###"
+        "\n"
+        "If you must ask, ask ONE question. Not two, not three. "
+        "If you find yourself writing a numbered list of questions, "
+        "STOP and just build with defaults.\n\n"
 
-        "GOOD:\n"
-        "  User: 'post a quote to zernio'\n"
-        "  AI: 'Happy to. Two quick things: which Zernio channel, and should I fetch\n"
-        "       a random quote or use one you provide?'\n"
-        "  User: 'Facebook, random'\n"
-        "  AI: 'Got it — fetching a random quote, posting to Facebook via Zernio.\n"
-        "       Here's the workflow:' [JSON]\n"
-        "       'You'll need Zernio credentials (api_key + profile_id + account_id)\n"
-        "        already configured in Credentials. Want me to load it?'\n\n"
+        "### NEVER REPEAT A QUESTION YOU ALREADY ASKED ###"
+        "\n"
+        "Before asking anything, scan the history. If your last message "
+        "was a question that the user already answered, DO NOT ASK IT AGAIN. "
+        "Just use their answer and build.\n\n"
 
+        "### ZERNIO / INSTAGRAM / SOCIAL POSTING ###"
+        "\n"
+        "Zernio is a valid tool that posts to: instagram, facebook, tiktok, "
+        "twitter, linkedin, threads, youtube, reddit, telegram, etc.\n"
+        "NEVER say you don't have Zernio - you do.\n"
+        "NEVER say you don't have Instagram - Zernio handles it.\n\n"
+        "Zernio tool node shape:"
+        "\n"
+        "  {type:'tool/integration', data:{"
+        "    service:'zernio',"
+        "    message:'',"
+        "    platform:'instagram',"
+        "    media_urls:['https://image-url.jpg']"
+        "  }}"
+        "\n\n"
+        "INSTAGRAM REQUIRES MEDIA (image or video). No exceptions.\n"
+        "If platform=instagram, media_urls MUST contain at least one image URL.\n"
+        "For other platforms (facebook, twitter, etc.), media_urls is optional.\n\n"
 
+        "### FREE IMAGE SOURCES FOR INSTAGRAM ###"
+        "\n"
+        "- https://picsum.photos/1024/1024  returns redirect to random image\n"
+        "- https://source.unsplash.com/random/1024x1024  (deprecated, may not work)\n"
+        "- https://picsum.photos/seed/{RANDOM}/1024  deterministic by seed\n"
+        "- https://loremflickr.com/1024/1024/{keyword}  random by keyword\n\n"
+        "For a random quote + random image workflow, use:"
+        "\n"
+        "  HTTP node 1: GET https://type.fit/api/quotes   (returns array)\n"
+        "  HTTP node 2: GET https://picsum.photos/1024/1024  (returns image URL)\n"
+        "  Code node: extract quote + image URL\n"
+        "  Zernio node: platform=instagram, media_urls=[image]\n\n"
 
-        "### RULE ZERO - RESEARCH CALLS research() DIRECTLY ###\n"
-        "You have ONE tool: `research(query)` - calls private research assistant.\n\n"
+        "### NODE SCHEMAS ###"
+        "\n"
+        "trigger/webhook     {type:'trigger/webhook', data:{}}\n"
+        "action/http         {type:'action/http', data:{url:'', method:'GET'}}\n"
+        "logic/code          {type:'logic/code', data:{lang:'javascript', code:''}}\n"
+        "tool/integration    {type:'tool/integration', data:{service:'', message:''}}\n"
+        "output/console      {type:'output/console', data:{}}\n\n"
 
-        "CALL research() DIRECTLY (do NOT build workflow) when user says:\n"
-        "  - 'do research' / 'do research on X' / 'do more research on X'\n"
-        "  - 'research X' / 'look up X' / 'what is X' / 'find me X'\n"
-        "  - 'ask my assistant about X' / 'search for X'\n"
-        "  - Any research request WITHOUT email/send/post/discord/slack target\n\n"
+        "### CODE NODE VARIABLES ###"
+        "\n"
+        "  input  - raw string from previous node\n"
+        "  data   - auto-parsed JSON (null if parse failed)\n"
+        "  output - call output(value) to pass to next node\n\n"
+        "ALWAYS guard: if (!data) { output('[ERROR] ...'); } else { ... }\n"
+        "Use backticks for templates: `text ${data.x}`\n"
+        "NEVER use ${...} outside backticks - syntax error.\n\n"
 
-        "When calling research():\n"
-        "  1. Call research(query='topic')\n"
-        "  2. Read result\n"
-        "  3. Answer user with TEXT\n"
-        "  4. DO NOT output JSON. DO NOT build workflow.\n\n"
+        "### KNOWN-WORKING QUOTE APIS ###"
+        "\n"
+        "  https://type.fit/api/quotes           returns [{text, author}, ...]\n"
+        "  https://dummyjson.com/quotes/random    returns {id, quote, author}\n"
+        "  https://zenquotes.io/api/random        returns [{q, a}]\n\n"
+        "DO NOT use api.quotable.io - TLS cert expired.\n\n"
 
-        "BUILD WORKFLOW ONLY IF user says:\n"
-        "  - 'research X and email me'\n"
-        "  - 'send the research to discord/slack/telegram'\n"
-        "  - 'email me a summary of X'\n\n"
+        "### KNOWN-WORKING IMAGE APIS ###"
+        "\n"
+        "  https://picsum.photos/1024/1024        302 redirect to random image\n"
+        "  https://picsum.photos/seed/{id}/1024    deterministic image\n"
+        "  https://loremflickr.com/1024/1024       random image from Flickr\n\n"
 
-        "TEST: ANSWER only? call research() directly. DELIVERY needed? build workflow.\n\n"
-
-        "### BUILD WORKFLOWS\n"
-        "Format: a JSON array of nodes. Each node is {type: string, data: OBJECT}.\n"
-        "`data` is ALWAYS an object with named keys — NEVER a raw string.\n\n"
-
-        "Node schemas (exact key names):\n"
-        "  trigger/webhook    data: {}                             (no keys)\n"
-        "  action/http        data: {url: string, method: string, body?: string, headers?: object}\n"
-        "  logic/code         data: {code: string, lang: \"javascript\"}\n"
-        "                     ← data.code contains the JS source as a STRING,\n"
-        "                       data.lang is the language, usually \"javascript\".\n"
-        "  tool/integration   data: {service: string, message: string}\n"
-        "                     ← service = one of: gmail-smtp, discord, slack, telegram,\n"
-        "                       notion, google-sheets, twilio-sms, webhook, http-custom,\n"
-        "                       buffer, zernio.\n"
-        "                     ← Buffer needs: api_key + organization_id + channel_id\n"
-        "                     ← Zernio needs: api_key + profile_id + account_id\n"
-        "                       message = \"\" (empty — auto-inherits previous output).\n"
-        "  output/console     data: {}                             (no keys)\n\n"
-
-        "WRONG examples (do NOT emit):\n"
-        "  {\"type\": \"logic/code\", \"data\": \"...JS string...\"}             ← data must be object, not string\n"
-        "  {\"type\": \"tool/integration\", \"data\": {\"integration\": \"email\", ...}}  ← must use `service`, not `integration`\n"
-        "  {\"type\": \"tool/integration\", \"data\": {\"to\": \"...\", \"subject\": \"...\"}}    ← only `service` and `message` allowed\n\n"
-
-        "CORRECT example for a Code node:\n"
-        "  {\"type\": \"logic/code\",\n"
-        "   \"data\": {\n"
-        "     \"lang\": \"javascript\",\n"
-        "     \"code\": \"if (!data || !data.jobs) { output('[ERROR] no jobs'); } else { output(data.jobs.slice(0,3).map(function(j){return j.title;}).join('\\\\n')); }\"\n"
-        "   }}\n\n"
-
-        "CORRECT example for an email tool node (gmail-smtp):\n"
-        "  {\"type\": \"tool/integration\",\n"
-        "   \"data\": {\"service\": \"gmail-smtp\", \"message\": \"\"}}\n\n"
-
-        "For research + delivery:\n"
-        "  url: '/api/remote_chat'\n"
-        "  method: 'POST'\n"
-        "  body: JSON string with message/session_id/voice\n"
-        "  headers: JSON string with Content-Type\n"
-        "Response shape: {\"status\":\"success\", \"response\":\"<inner-json-string>\"}\n"
-        "  → The Code node's `data` variable is auto-flattened to the inner payload,\n"
-        "    so use `data.jobs`, `data.status`, NOT `data.response.jobs`.\n\n"
-
-        "### CODE NODES (JavaScript)\n"
-        "Every JS Code node runs in a sandbox with THREE variables:\n"
-        "  - input:  STRING — raw text from the previous node (may start with 'HTTP 200: ')\n"
-        "  - data:   OBJECT|null — input auto-parsed as JSON. If input looked like\n"
-        "            {status, response}, the runtime recursively parses `.response`.\n"
-        "            So `data` always ends up as the INNER payload (e.g. {jobs:[...]}).\n"
-        "  - output: FUNCTION — call output(value) to pass a result to the next node.\n\n"
-
-        "HARD RULES for JS Code nodes:\n"
-        "  1. NO require(), fs, path, process, Buffer, or any Node.js builtin.\n"
-        "     Allowed globals: JSON, Math, Date, String, Array, Object, RegExp,\n"
-        "                     Promise, console.log (goes to stderr).\n"
-        "  2. NO `return` at top level — use `output(result)` instead.\n"
-        "  3. `data` may be null if input isn't JSON — always guard with:\n"
-        "     if (!data) { output('[ERROR] no JSON'); } else { ... }\n"
-        "  4. EVERY code node MUST end with output(...).\n"
-        "  5. Do NOT use `data.response.jobs` — use `data.jobs` (already flattened).\n\n"
-
-        "CANONICAL EXAMPLE — extract jobs from Remotive and format for email:\n"
-        "```javascript\n"
-        "if (!data || !data.jobs) {\n"
-        "  output('[ERROR] No jobs in response');\n"
-        "} else {\n"
-        "  const top3 = data.jobs.slice(0, 3);\n"
-        "  const lines = top3.map(function(j) {\n"
-        "    return '• ' + (j.title || 'Unknown') + ' – ' + (j.company_name || 'Unknown') + '\\n' +\n"
-        "           '  Location: ' + (j.candidate_required_location || 'Unknown') + '\\n' +\n"
-        "           '  URL: ' + (j.url || '');\n"
-        "  });\n"
-        "  output(lines.join('\\n\\n'));\n"
-        "}\n"
-        "```\n\n"
-
-        "When the previous node outputs JSON via HTTP request, `input` looks like\n"
-        "'HTTP 200: {...}' and `data` is the parsed object. You do NOT need to parse.\n\n"
-
-        "### KNOWN-WORKING APIs (use these; do NOT invent others)\n"
-        "  Bitcoin price:  https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd\n"
-        "                  returns {bitcoin:{usd:97500}}\n"
-        "                  use: data.bitcoin.usd\n"
-        "                  THIS IS THE ONLY reliable Bitcoin API from Vercel.\n"
-        "  Crypto prices:  https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd\n"
-        "                  returns {ethereum:{usd:3400}}\n"
-        "                  use: data.ethereum.usd\n"
-        "  Remote jobs:    https://remotive.com/api/remote-jobs\n"
-        "                  returns {jobs:[...]}\n"
-        "                  use: data.jobs\n"
-        "  Weather:        https://wttr.in/CITY?format=j1\n"
-        "                  use: data.current_condition[0].temp_C\n"
-        "  GitHub issues:  https://api.github.com/repos/OWNER/REPO/issues?state=open&per_page=5\n"
-        "                  returns an ARRAY\n"
-        "                  use: Array.isArray(data) ? data : []\n"
-        "  RSS example:    https://news.ycombinator.com/rss\n"
-        "                  returns XML - data will be NULL\n"
-        "                  use: input (raw string) with RegExp\n"
-        "  News:           https://newsapi.org/v2/top-headlines?country=us&apiKey=KEY\n"
-        "                  use: data.articles\n\n"
-
-        "DEPRECATED URLs - NEVER emit these:\n"
-        "  - api.coindesk.com        (DNS dead since 2024)\n"
-        "  - api.binance.com         (HTTP 451 from Vercel US East)\n"
-        "  - remotive.io             (use remotive.com)\n"
-        "  - api.cryptocompare.com   (requires paid key)\n\n"
-
-        "If the user asks for Bitcoin price, ALWAYS use CoinGecko:\n"
-        "  https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd\n\n"
-
-
-        "### SOCIAL POSTING TOOLS\n"
-        "If the user says 'post to Facebook' or 'post to Zernio' or 'post to social media':\n"
-        "  → Use tool/integration with service='zernio'. Zernio handles Facebook, LinkedIn,\n"
-        "    Instagram, and other social platforms via a single API.\n"
-        "  → The workflow needs a source for the content first (HTTP fetch, Code node that\n"
-        "    generates/selects text, or research via /api/remote_chat).\n"
-        "  → Set message=\"\" so the previous node's output becomes the post body.\n\n"
-        "If the user says 'post to Buffer':\n"
-        "  → Use tool/integration with service='buffer'. Buffer also posts to social platforms.\n\n"
-        "These ARE valid tools. Do NOT say 'I don't have Facebook / Zernio / Buffer integration'.\n"
-        "They are in TOOL_HANDLERS and the backend will execute them.\n\n"
-
-        "RULES FOR TOOL NODES:\n"
-        "  - If the user asks for a tool that exists in the list above, USE IT. Do NOT refuse.\n"
-        "  - Do NOT say 'I do not have X integration' for any tool in the list.\n"
-        "  - zernio IS a valid tool. buffer IS a valid tool.\n"
-        "  - If the user says 'post to Facebook', use service='zernio' (Zernio posts to Facebook).\n"
-        "  - If you are unsure about credentials, still build the workflow — the user\n"
-        "    configures credentials in the Credentials panel separately.\n\n"
-
-        "### TOOLS\n"
-        "tool/integration message field MUST be empty string \"\" — the tool node\n"
-        "automatically uses the previous node's output as its message.\n"
-        "email/discord/slack/sheets -> tool/integration\n"
-        "APIs -> action/http"
+        "### OUTPUT FORMAT ###"
+        "\n"
+        "When building: output JSON array inside ```json block.\n"
+        "When answering: plain text, no JSON.\n"
+        "Keep responses SHORT. Users want workflows, not essays.\n"
     )
-    
-    
-    
-    
-    
-    
-    
 
     if not message:
         return jsonify({"error": "no message"}), 400
