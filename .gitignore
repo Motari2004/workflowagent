@@ -190,3 +190,5 @@ venv/
 
 
 execution_logs/
+# Allow Node.js bundle
+!nodejs/node.gz

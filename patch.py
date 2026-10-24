@@ -1,62 +1,46 @@
-import os, shutil, re
+import tarfile, gzip, shutil
+from pathlib import Path
 
-HTML = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\public\index.html'
+proj = Path('.')
+tar = proj / 'node20.tar.xz'
 
-if not os.path.exists(HTML):
-    print("Not found:", HTML); exit(1)
+if not tar.exists():
+    print("FAIL: node20.tar.xz not found")
+    raise SystemExit(1)
 
-shutil.copy(HTML, HTML + '.backup_urls')
-print("Backed up\n")
+print("Extracting...")
+with tarfile.open(tar) as t:
+    t.extractall(proj)
 
-with open(HTML, 'r', encoding='utf-8') as f:
-    html = f.read()
+node_bin = proj / 'node-v20.18.0-linux-x64' / 'bin' / 'node'
+if not node_bin.exists():
+    print("FAIL: node binary not in archive")
+    raise SystemExit(1)
 
-print("File:", len(html), "chars\n")
+print("Node 20 binary: {:,} bytes".format(node_bin.stat().st_size))
 
-# Count how many localhost refs exist
-before = html.count('http://localhost:10000')
-print(f"Found {before} hardcoded localhost URLs\n")
+if open(node_bin, 'rb').read(4) != b'\x7fELF':
+    print("FAIL: not ELF binary")
+    raise SystemExit(1)
+print("ELF verified")
 
-# Replace localhost:10000 with relative paths
-# Two passes to handle both `http://localhost:10000/` and `http://localhost:10000`
-html = html.replace('http://localhost:10000/', '/')
-html = html.replace('http://localhost:10000', '')
+print("Compressing...")
+gz = proj / 'nodejs' / 'node.gz'
+if gz.exists():
+    gz.unlink()
 
-# Fix any accidental double slashes like `//run` (should be `/run`)
-html = re.sub(r"'(?<!:)//([a-z])", r"'/\1", html)   # '//run' -> '/run'
-html = re.sub(r'"(?<!:)//([a-z])', r'"/\1', html)   # "//run" -> "/run"
+with open(node_bin, 'rb') as fin, gzip.open(gz, 'wb', compresslevel=9) as fout:
+    shutil.copyfileobj(fin, fout)
 
-# Also replace template-literal forms
-html = html.replace('`http://localhost:10000/', '`/')
-html = html.replace('`http://localhost:10000', '`')
+size = gz.stat().st_size
+print("New node.gz: {:,} bytes ({:.1f} MB)".format(size, size / 1024 / 1024))
 
-# Handle ws:// forms (there aren't any, but just in case)
-html = html.replace("'ws://localhost:10000", "((location.protocol==='https:')?'wss://':'ws://') + location.host")
+if gzip.open(gz, 'rb').read(4) != b'\x7fELF':
+    print("FAIL: gz content corrupt")
+    raise SystemExit(1)
+print("gz verified")
 
-with open(HTML, 'w', encoding='utf-8') as f:
-    f.write(html)
-
-print(f"Wrote {len(html)} chars")
-
-# Verification
-with open(HTML, 'r', encoding='utf-8') as f:
-    final = f.read()
-
-after = final.count('localhost:10000')
-print()
-print("=" * 55)
-print(f"Remaining localhost:10000 refs: {after}")
-print("=" * 55)
-
-# Show remaining if any
-if after > 0:
-    print("\nRemaining occurrences (context):")
-    for m in re.finditer(r'.{0,40}localhost:10000.{0,40}', final):
-        print(f"  ...{m.group(0)}...")
-
-# Show sample of new fetch calls
-print("\nSample of fetch calls now:")
-for m in re.finditer(r"fetch\(['\"`]([^'\"`]+)", final):
-    print(f"  {m.group(1)}")
-    if m.start() > 8000:  # just show a few
-        break
+print("Cleaning up...")
+shutil.rmtree(proj / 'node-v20.18.0-linux-x64', ignore_errors=True)
+tar.unlink(missing_ok=True)
+print("DONE — ready to commit")

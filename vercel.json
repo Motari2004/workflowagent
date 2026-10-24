@@ -6,18 +6,14 @@
       "use": "@vercel/python",
       "config": {
         "maxLambdaSize": "50mb",
-        "includeFiles": "public/**"
+        "includeFiles": ["public/**", "nodejs/node.gz"]
       }
     }
   ],
   "routes": [
-    {
-      "src": "/static/(.*)",
-      "dest": "/public/$1"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "server.py"
-    }
+    { "src": "/", "dest": "/public/index.html" },
+    { "src": "/index.html", "dest": "/public/index.html" },
+    { "src": "/static/(.*)", "dest": "/public/$1" },
+    { "src": "/(.*)", "dest": "server.py" }
   ]
 }

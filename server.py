@@ -1007,6 +1007,34 @@ import subprocess
 import tempfile
 import shutil
 
+def _ensure_node_binary():
+    """
+    On Vercel (serverless), there is no system Node.js.
+    Extract the bundled node.gz into /tmp/node on first call.
+    The file persists for the lifetime of the function instance.
+    """
+    import gzip as _gzip
+    here = Path(__file__).parent
+    archive = here / "nodejs" / "node.gz"
+    target = Path("/tmp") / "node"
+
+    if not archive.exists():
+        print(f"[js] Node archive not found at {archive}")
+        return None
+
+    if not target.exists():
+        try:
+            with _gzip.open(archive, 'rb') as fin, open(target, 'wb') as fout:
+                shutil.copyfileobj(fin, fout)
+            os.chmod(target, 0o755)
+            print(f"[js] Extracted bundled node -> {target}")
+        except Exception as e:
+            print(f"[js] Extraction failed: {e}")
+            return None
+
+    return str(target)
+
+
 def run_js_code(user_code, input_value, timeout=30):
     """
     Execute JavaScript via Node.js subprocess with UTF-8 encoding.
@@ -1014,8 +1042,10 @@ def run_js_code(user_code, input_value, timeout=30):
     """
     node_exe = shutil.which("node")
     if not node_exe:
+        node_exe = _ensure_node_binary()
+    if not node_exe:
         return {"ok": False, "output": None,
-                "error": "Node.js not found. Install from https://nodejs.org"}
+                "error": "Node.js not found in PATH or bundled (expected nodejs/node.gz)"}
 
     template = r"""
 const fs = require('fs');
