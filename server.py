@@ -1448,7 +1448,32 @@ def run_workflow():
     return jsonify(result)
 
 @app.route('/workflows', methods=['GET'])
-def list_all_workflows(): return jsonify({"workflows": list_workflows()})
+def list_all_workflows():
+    if USE_DB:
+        rows = _db_all("SELECT name, payload FROM workflows ORDER BY name")
+        result = []
+        for r in rows:
+            p = r["payload"] or {}
+            result.append({
+                "name": r["name"],
+                "mode": p.get("mode", "once"),
+                "schedule": p.get("schedule", ""),
+                "last_run_at": p.get("last_run_at"),
+            })
+        return jsonify({"workflows": result})
+    wfs = []
+    for path in DATA_DIR.glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+            wfs.append({
+                "name": path.stem,
+                "mode": data.get("mode", "once"),
+                "schedule": data.get("schedule", ""),
+                "last_run_at": data.get("last_run_at"),
+            })
+        except Exception:
+            wfs.append({"name": path.stem, "mode": "once", "schedule": "", "last_run_at": None})
+    return jsonify({"workflows": wfs})
 
 @app.route('/workflows/<name>', methods=['GET','PUT','DELETE'])
 def wf_by_name(name):

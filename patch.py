@@ -5,7 +5,7 @@ HTML = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\public\index.html'
 if not os.path.exists(HTML):
     print("ERROR: not found"); sys.exit(1)
 
-shutil.copy(HTML, HTML + '.backup_schedmodal')
+shutil.copy(HTML, HTML + '.backup_simple_sched')
 print("Backed up\n")
 
 with open(HTML, 'r', encoding='utf-8') as f:
@@ -15,201 +15,25 @@ print("File: {} chars".format(len(html)))
 changes = 0
 
 # ═══════════════════════════════════════════════════════════════
-# 1. Remove the sidebar mode + schedule UI that was added
+# Replace the entire openScheduleModal function
 # ═══════════════════════════════════════════════════════════════
-print("\n[1] Removing sidebar mode/schedule UI...")
+print("[1] Replacing openScheduleModal with simpler 12-hour version...")
 
-old_sidebar_ui = '''<div style="margin-bottom:8px;">
-                <select id="workflowMode" class="pro-input" title="How this workflow runs">
-                    <option value="once">▶ One-shot (manual / webhook only)</option>
-                    <option value="scheduled">🔄 Scheduled (auto-runs)</option>
-                </select>
-            </div>
-            <div id="scheduleFields" style="display:none; margin-bottom:8px;">
-                <label style="display:block; font-size:10px; color:#64748b; margin-bottom:4px; text-transform:uppercase;">Cron Schedule (UTC)</label>
-                <input id="workflowSchedule" type="text" class="pro-input" placeholder="0 9 * * *" value="0 9 * * *">
-                <div style="font-size:9px; color:#475569; margin-top:4px; line-height:1.6;">
-                    <code style="color:#94a3b8;">0 9 * * *</code> — daily 9:00 UTC<br>
-                    <code style="color:#94a3b8;">22 8 * * *</code> — daily 8:22 UTC<br>
-                    <code style="color:#94a3b8;">0 6 * * 1-5</code> — weekdays 6:00 UTC<br>
-                    <code style="color:#94a3b8;">*/10 * * * *</code> — every 10 min
-                </div>
-            </div>
-            '''
+old_fn_pattern = re.compile(
+    r"async function openScheduleModal\(\) \{[\s\S]*?\n\}\n\nfunction updateScheduleBadge",
+    re.DOTALL
+)
 
-if old_sidebar_ui in html:
-    html = html.replace(old_sidebar_ui, '', 1)
-    changes += 1
-    print("  OK — removed sidebar mode/schedule UI")
-else:
-    # Try without trailing whitespace
-    old_alt = old_sidebar_ui.rstrip()
-    if old_alt in html:
-        html = html.replace(old_alt, '', 1)
-        changes += 1
-        print("  OK — removed sidebar mode/schedule UI (alt)")
-    else:
-        print("  WARN — sidebar UI not found (may be from a different patch)")
-        print("  Searching for 'workflowMode' in sidebar...")
-        if 'id="workflowMode"' in html:
-            # Try to find and remove the whole block
-            pattern = re.compile(
-                r'<div style="margin-bottom:8px;">\s*<select id="workflowMode"[\s\S]*?</div>\s*(?=<div id="workflowLoadedContainer")',
-                re.DOTALL
-            )
-            if pattern.search(html):
-                html = pattern.sub('', html, count=1)
-                changes += 1
-                print("  OK — removed via regex")
-
-# ═══════════════════════════════════════════════════════════════
-# 2. Replace the Schedule button's onclick
-# ═══════════════════════════════════════════════════════════════
-print("\n[2] Rewiring Schedule button...")
-
-old_btn = '''<button onclick="scheduleCurrentWorkflow()" class="pro-btn">
-                <i class="fas fa-clock"></i>
-                <span>Schedule</span>
-                <span class="shortcut">60s</span>
-            </button>'''
-
-new_btn = '''<button onclick="openScheduleModal()" class="pro-btn">
-                <i class="fas fa-clock"></i>
-                <span>Schedule</span>
-                <span class="shortcut" id="schedBadge"></span>
-            </button>'''
-
-if old_btn in html:
-    html = html.replace(old_btn, new_btn, 1)
-    changes += 1
-    print("  OK — Schedule button rewired to openScheduleModal()")
-else:
-    # Try alternate — some patches may have changed the shortcut
-    pattern = re.compile(
-        r'<button onclick="scheduleCurrentWorkflow\(\)"[^>]*>[\s\S]*?</button>',
-        re.DOTALL
-    )
-    if pattern.search(html):
-        html = pattern.sub(new_btn, html, count=1)
-        changes += 1
-        print("  OK — Schedule button rewired (regex)")
-
-# ═══════════════════════════════════════════════════════════════
-# 3. Remove the old mode toggle listener
-# ═══════════════════════════════════════════════════════════════
-print("\n[3] Removing old mode toggle listener...")
-
-old_listener = '''// Show/hide schedule field based on mode
-(function() {
-    const modeEl = document.getElementById('workflowMode');
-    const schedEl = document.getElementById('scheduleFields');
-    if (modeEl && schedEl) {
-        modeEl.addEventListener('change', function() {
-            schedEl.style.display = (this.value === 'scheduled') ? 'block' : 'none';
-        });
-    }
-})();
-
-'''
-
-if old_listener in html:
-    html = html.replace(old_listener, '', 1)
-    changes += 1
-    print("  OK — old listener removed")
-
-# ═══════════════════════════════════════════════════════════════
-# 4. Remove mode + schedule from saveCurrentWorkflow
-# ═══════════════════════════════════════════════════════════════
-print("\n[4] Simplifying saveCurrentWorkflow...")
-
-old_save_add = '''const mode = document.getElementById('workflowMode')?.value || 'once';
-    const schedule = document.getElementById('workflowSchedule')?.value.trim() || '';
-    
-    const payload = {
-        nodes: buildPayload(),
-        graph: graph.serialize(),
-        mode: mode,
-        schedule: schedule,
-        updated_at: new Date().toISOString()
-    };'''
-
-new_save_add = '''// Preserve existing mode/schedule (not edited here — Schedule button handles that)
-    let _existingMode = 'once', _existingSchedule = '';
-    try {
-        const _r = await fetch(`/workflows/${encodeURIComponent(name)}`);
-        if (_r.ok) {
-            const _d = await _r.json();
-            _existingMode = _d.mode || 'once';
-            _existingSchedule = _d.schedule || '';
-        }
-    } catch (_) {}
-    
-    const payload = {
-        nodes: buildPayload(),
-        graph: graph.serialize(),
-        mode: _existingMode,
-        schedule: _existingSchedule,
-        updated_at: new Date().toISOString()
-    };'''
-
-if old_save_add in html:
-    html = html.replace(old_save_add, new_save_add, 1)
-    changes += 1
-    print("  OK — saveCurrentWorkflow preserves existing mode/schedule")
-else:
-    print("  WARN — saveCurrentWorkflow pattern not matched")
-
-# ═══════════════════════════════════════════════════════════════
-# 5. Remove mode restore from loadWorkflowFromSelector
-# ═══════════════════════════════════════════════════════════════
-print("\n[5] Cleaning up loadWorkflowFromSelector...")
-
-old_load_restore = '''// Restore mode + schedule
-            const modeEl = document.getElementById('workflowMode');
-            const schedEl = document.getElementById('workflowSchedule');
-            const schedFields = document.getElementById('scheduleFields');
-            if (modeEl) {
-                modeEl.value = data.mode || 'once';
-                if (schedFields) schedFields.style.display = modeEl.value === 'scheduled' ? 'block' : 'none';
-            }
-            if (schedEl) {
-                schedEl.value = data.schedule || '';
-            }'''
-
-new_load_restore = '''// Update Schedule button badge with current mode/schedule
-            const schedBadge = document.getElementById('schedBadge');
-            if (schedBadge) {
-                if (data.mode === 'scheduled' && data.schedule) {
-                    schedBadge.textContent = '🔄';
-                    schedBadge.style.color = '#22c55e';
-                } else {
-                    schedBadge.textContent = '';
-                }
-            }'''
-
-if old_load_restore in html:
-    html = html.replace(old_load_restore, new_load_restore, 1)
-    changes += 1
-    print("  OK — loadWorkflowFromSelector cleaned up")
-
-# ═══════════════════════════════════════════════════════════════
-# 6. Add openScheduleModal() and related functions
-# ═══════════════════════════════════════════════════════════════
-print("\n[6] Adding openScheduleModal() + helpers...")
-
-# Insert before the "// Bindings" comment
-marker = "// Bindings\n"
-
-modal_code = '''// ═══════════════════════════════════════════════════════════════
-// SCHEDULE MODAL — set per-workflow cron schedule
-// ═══════════════════════════════════════════════════════════════
-async function openScheduleModal() {
-    // Get current workflow
+new_fn = '''async function openScheduleModal() {
     let name = document.getElementById('workflowName').value.trim();
     if (document.getElementById('workflowInputContainer').style.display === 'none') {
         name = document.getElementById('currentLoadedName').textContent.trim();
     }
     if (!name) { toast('Save or name the workflow first', 'error'); return; }
+    
+    // Save canvas first so we don't lose nodes
+    const saved = await saveCurrentWorkflow();
+    if (!saved) { toast('Could not save workflow first', 'error'); return; }
     
     // Fetch current mode + schedule
     let currentMode = 'once', currentSchedule = '';
@@ -222,77 +46,111 @@ async function openScheduleModal() {
         }
     } catch (_) {}
     
+    // Parse existing cron into hour/minute/am-pm (assume daily = "M H * * *")
+    let initHour12 = 9, initMin = 0, initAmPm = 'AM', hasSchedule = currentMode === 'scheduled' && currentSchedule;
+    if (hasSchedule) {
+        const parts = currentSchedule.trim().split(/\\s+/);
+        if (parts.length === 5) {
+            const min = parseInt(parts[0]) || 0;
+            let hour24 = parseInt(parts[1]) || 9;
+            initMin = min;
+            if (hour24 === 0) { initHour12 = 12; initAmPm = 'AM'; }
+            else if (hour24 === 12) { initHour12 = 12; initAmPm = 'PM'; }
+            else if (hour24 < 12) { initHour12 = hour24; initAmPm = 'AM'; }
+            else { initHour12 = hour24 - 12; initAmPm = 'PM'; }
+        }
+    }
+    
     // Build modal
     document.querySelectorAll('.modal-overlay').forEach(m => m.remove());
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
     
+    // Build hour options 1-12
+    let hourOpts = '';
+    for (let h = 1; h <= 12; h++) {
+        hourOpts += `<option value="${h}" ${h === initHour12 ? 'selected' : ''}>${h}</option>`;
+    }
+    // Build minute options (00, 05, 10, ..., 55)
+    let minOpts = '';
+    for (let m = 0; m < 60; m += 5) {
+        const mm = String(m).padStart(2, '0');
+        minOpts += `<option value="${m}" ${m === initMin ? 'selected' : ''}>${mm}</option>`;
+    }
+    
+    const timeDisplay = hasSchedule 
+        ? `${initHour12}:${String(initMin).padStart(2,'0')} ${initAmPm} (UTC) daily` 
+        : 'not scheduled';
+    
     overlay.innerHTML = `
-        <div class="modal" style="width: 500px;">
+        <div class="modal" style="width: 480px;">
             <h2 style="margin-top:0; font-size:16px; display:flex; align-items:center; gap:8px;">
                 <i class="fas fa-clock text-blue-400"></i> Schedule "${name}"
             </h2>
-            <p style="font-size:12px; color:#94a3b8; margin-bottom:16px;">
-                Choose how this workflow runs. One-shot workflows only run when you click Execute or POST to their webhook.
-                Scheduled workflows run automatically via the cron dispatcher.
+            <p style="font-size:12px; color:#94a3b8; margin-bottom:20px; line-height:1.5;">
+                Runs <strong>once per day</strong> at the time you set below.
+                If the scheduler wakes up late, the workflow still runs — catch-up handles it.
             </p>
             
-            <div style="margin-bottom:16px;">
-                <label style="display:block; font-size:11px; color:#94a3b8; text-transform:uppercase; margin-bottom:6px;">Mode</label>
-                <select id="modalSchedMode" class="pro-input" style="width:100%; height:38px;">
-                    <option value="once">▶ One-shot (manual / webhook only)</option>
-                    <option value="scheduled">🔄 Scheduled (auto-runs on cron)</option>
-                </select>
-            </div>
-            
-            <div id="modalSchedFields" style="display:none; margin-bottom:16px;">
-                <label style="display:block; font-size:11px; color:#94a3b8; text-transform:uppercase; margin-bottom:6px;">Cron Expression (UTC)</label>
-                <input id="modalSchedCron" type="text" class="pro-input" placeholder="22 8 * * *" value="${currentSchedule || '0 9 * * *'}" style="width:100%; height:38px; font-family:ui-monospace,monospace;">
-                <div style="font-size:10px; color:#64748b; margin-top:8px; line-height:1.8;">
-                    <code style="color:#93c5fd;">0 9 * * *</code> — daily 09:00 UTC<br>
-                    <code style="color:#93c5fd;">22 8 * * *</code> — daily 08:22 UTC<br>
-                    <code style="color:#93c5fd;">0 6 * * 1-5</code> — weekdays 06:00 UTC<br>
-                    <code style="color:#93c5fd;">0 */2 * * *</code> — every 2 hours<br>
-                    <code style="color:#93c5fd;">*/10 * * * *</code> — every 10 minutes<br>
-                    <code style="color:#93c5fd;">0 9 1 * *</code> — 1st of every month, 09:00 UTC
+            <div style="margin-bottom:8px;">
+                <label style="display:block; font-size:11px; color:#94a3b8; text-transform:uppercase; margin-bottom:8px; letter-spacing:0.05em;">Daily Run Time (UTC)</label>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <select id="modalHour" class="pro-input" style="width:90px; height:42px; font-size:16px; text-align:center; padding:0;">
+                        ${hourOpts}
+                    </select>
+                    <span style="font-size:20px; color:#64748b; font-weight:600;">:</span>
+                    <select id="modalMin" class="pro-input" style="width:90px; height:42px; font-size:16px; text-align:center; padding:0;">
+                        ${minOpts}
+                    </select>
+                    <select id="modalAmPm" class="pro-input" style="width:100px; height:42px; font-size:14px; text-align:center; padding:0;">
+                        <option value="AM" ${initAmPm === 'AM' ? 'selected' : ''}>AM</option>
+                        <option value="PM" ${initAmPm === 'PM' ? 'selected' : ''}>PM</option>
+                    </select>
                 </div>
-                <div style="font-size:10px; color:#f59e0b; margin-top:8px;">
-                    ⚠️ If the dispatcher runs late, the workflow will still execute — catch-up handles missed slots.
+                <div style="font-size:11px; color:#475569; margin-top:6px;">
+                    Current: <span id="modalPreview" style="color:#60a5fa;">${timeDisplay}</span>
                 </div>
             </div>
             
-            <div class="modal-buttons" style="justify-content: space-between;">
-                <button class="modal-btn secondary" id="modalSchedRemoveBtn" style="display:${currentMode === 'scheduled' ? 'block' : 'none'};">Remove Schedule</button>
+            <div style="font-size:10px; color:#64748b; margin-top:16px; padding:10px; background:rgba(148,163,184,0.05); border-radius:6px; line-height:1.6;">
+                <strong style="color:#94a3b8;">Common times:</strong><br>
+                Morning reports → 9:00 AM • Noon check → 12:00 PM<br>
+                Evening summary → 6:00 PM • Midnight → 12:00 AM
+            </div>
+            
+            <div class="modal-buttons" style="justify-content: space-between; margin-top:24px;">
+                <button class="modal-btn secondary" id="modalRemoveBtn" style="display:${hasSchedule ? 'block' : 'none'};">Stop Schedule</button>
                 <div style="display:flex; gap:8px; margin-left:auto;">
-                    <button class="modal-btn secondary" id="modalSchedCancelBtn">Cancel</button>
-                    <button class="modal-btn primary" id="modalSchedSaveBtn">Save</button>
+                    <button class="modal-btn secondary" id="modalCancelBtn">Cancel</button>
+                    <button class="modal-btn primary" id="modalSaveBtn">Save Schedule</button>
                 </div>
             </div>
         </div>
     `;
     document.body.appendChild(overlay);
     
-    const modeSel = document.getElementById('modalSchedMode');
-    const schedFields = document.getElementById('modalSchedFields');
-    const cronInput = document.getElementById('modalSchedCron');
-    const removeBtn = document.getElementById('modalSchedRemoveBtn');
+    const hourSel = document.getElementById('modalHour');
+    const minSel = document.getElementById('modalMin');
+    const ampmSel = document.getElementById('modalAmPm');
+    const preview = document.getElementById('modalPreview');
+    const removeBtn = document.getElementById('modalRemoveBtn');
     
-    // Initialize
-    modeSel.value = currentMode;
-    schedFields.style.display = currentMode === 'scheduled' ? 'block' : 'none';
-    if (!currentSchedule) cronInput.value = '0 9 * * *';
-    
-    // Toggle schedule fields
-    modeSel.addEventListener('change', () => {
-        schedFields.style.display = modeSel.value === 'scheduled' ? 'block' : 'none';
-        removeBtn.style.display = modeSel.value === 'scheduled' && currentMode === 'scheduled' ? 'block' : 'none';
-    });
+    // Update preview when any picker changes
+    function updatePreview() {
+        const h = parseInt(hourSel.value);
+        const m = String(parseInt(minSel.value)).padStart(2, '0');
+        const ap = ampmSel.value;
+        preview.textContent = `${h}:${m} ${ap} (UTC) daily`;
+    }
+    hourSel.addEventListener('change', updatePreview);
+    minSel.addEventListener('change', updatePreview);
+    ampmSel.addEventListener('change', updatePreview);
     
     // Cancel
-    document.getElementById('modalSchedCancelBtn').addEventListener('click', () => overlay.remove());
+    document.getElementById('modalCancelBtn').addEventListener('click', () => overlay.remove());
     
-    // Remove schedule
+    // Stop schedule
     removeBtn.addEventListener('click', async () => {
         try {
             const r = await fetch(`/workflows/${encodeURIComponent(name)}`);
@@ -307,37 +165,41 @@ async function openScheduleModal() {
                 body: JSON.stringify(wf)
             });
             if (saveRes.ok) {
-                toast('Schedule removed', 'success');
+                toast('Schedule stopped', 'success');
                 overlay.remove();
                 updateScheduleBadge('once', '');
                 await refreshWorkflowList();
-            } else {
-                toast('Remove failed', 'error');
             }
         } catch (e) {
             toast('Error: ' + e.message, 'error');
         }
     });
     
-    // Save
-    document.getElementById('modalSchedSaveBtn').addEventListener('click', async () => {
-        const newMode = modeSel.value;
-        const newSchedule = newMode === 'scheduled' ? cronInput.value.trim() : '';
+    // Save schedule — convert 12h time to cron
+    document.getElementById('modalSaveBtn').addEventListener('click', async () => {
+        const h = parseInt(hourSel.value);       // 1..12
+        const m = parseInt(minSel.value);         // 0..55
+        const ap = ampmSel.value;                 // 'AM' or 'PM'
         
-        // Validate cron if scheduled
-        if (newMode === 'scheduled') {
-            if (!newSchedule) { toast('Enter a cron expression', 'error'); return; }
-            if (newSchedule.split(' ').length !== 5) {
-                toast('Cron must have 5 fields (minute hour day month weekday)', 'error');
-                return;
-            }
+        // Convert 12h to 24h
+        let hour24;
+        if (ap === 'AM') {
+            hour24 = (h === 12) ? 0 : h;
+        } else {
+            hour24 = (h === 12) ? 12 : (h + 12);
         }
+        
+        // Build cron expression: "M H * * *"
+        const cronExpr = `${m} ${hour24} * * *`;
         
         try {
             const r = await fetch(`/workflows/${encodeURIComponent(name)}`);
-            const wf = r.ok ? await r.json() : {};
-            wf.mode = newMode;
-            wf.schedule = newSchedule;
+            const wf = await r.json();
+            wf.mode = 'scheduled';
+            wf.schedule = cronExpr;
+            if (!wf.last_run_at) {
+                wf.last_run_at = new Date(Date.now() - 24*60*60*1000).toISOString().replace('.000', '');
+            }
             
             const saveRes = await fetch(`/workflows/${encodeURIComponent(name)}`, {
                 method: 'PUT',
@@ -345,9 +207,10 @@ async function openScheduleModal() {
                 body: JSON.stringify(wf)
             });
             if (saveRes.ok) {
-                toast(newMode === 'scheduled' ? 'Scheduled: ' + newSchedule : 'Set to one-shot', 'success');
+                const timeStr = `${h}:${String(m).padStart(2, '0')} ${ap}`;
+                toast('Scheduled daily at ' + timeStr + ' UTC', 'success');
                 overlay.remove();
-                updateScheduleBadge(newMode, newSchedule);
+                updateScheduleBadge('scheduled', cronExpr);
                 await refreshWorkflowList();
             } else {
                 toast('Save failed', 'error');
@@ -358,7 +221,22 @@ async function openScheduleModal() {
     });
 }
 
-function updateScheduleBadge(mode, schedule) {
+function updateScheduleBadge'''
+
+if old_fn_pattern.search(html):
+    # ★ Use lambda to avoid escape processing in replacement string
+    html = old_fn_pattern.sub(lambda m: new_fn, html, count=1)
+    changes += 1
+    print("  OK — openScheduleModal replaced with 12-hour version")
+else:
+    print("  FAIL — openScheduleModal pattern not matched")
+
+# ═══════════════════════════════════════════════════════════════
+# Update the badge to show a friendlier label
+# ═══════════════════════════════════════════════════════════════
+print("\n[2] Improving badge display...")
+
+old_badge = '''function updateScheduleBadge(mode, schedule) {
     const badge = document.getElementById('schedBadge');
     if (!badge) return;
     if (mode === 'scheduled' && schedule) {
@@ -369,118 +247,92 @@ function updateScheduleBadge(mode, schedule) {
         badge.textContent = '';
         badge.title = '';
     }
-}
+}'''
 
-// Bindings
-'''
+new_badge = '''function updateScheduleBadge(mode, schedule) {
+    const badge = document.getElementById('schedBadge');
+    if (!badge) return;
+    if (mode === 'scheduled' && schedule) {
+        let label = 'daily';
+        try {
+            const parts = schedule.trim().split(/\\s+/);
+            if (parts.length === 5) {
+                const min = parseInt(parts[0]) || 0;
+                const hour24 = parseInt(parts[1]) || 0;
+                let h12, ap;
+                if (hour24 === 0) { h12 = 12; ap = 'AM'; }
+                else if (hour24 === 12) { h12 = 12; ap = 'PM'; }
+                else if (hour24 < 12) { h12 = hour24; ap = 'AM'; }
+                else { h12 = hour24 - 12; ap = 'PM'; }
+                label = `${h12}:${String(min).padStart(2,'0')} ${ap}`;
+            }
+        } catch (_) {}
+        badge.textContent = label;
+        badge.style.color = '#22c55e';
+        badge.title = 'Scheduled: ' + schedule;
+    } else {
+        badge.textContent = '';
+        badge.title = '';
+    }
+}'''
 
-if 'async function openScheduleModal' not in html:
-    if marker in html:
-        html = html.replace(marker, modal_code, 1)
-        changes += 1
-        print("  OK — openScheduleModal() + updateScheduleBadge() added")
-    else:
-        print("  FAIL — Bindings marker not found")
-else:
-    print("  SKIP — openScheduleModal already exists")
+if old_badge in html:
+    # Use lambda too — the badge contains regex escape \s
+    html = html.replace(old_badge, new_badge, 1)
+    changes += 1
+    print("  OK — badge shows friendly time (e.g. '9:00 AM')")
 
 # ═══════════════════════════════════════════════════════════════
-# 7. Update the dropdown to show scheduled badge without the old optgroup
+# Also improve the dropdown labels — show friendly time instead of raw cron
 # ═══════════════════════════════════════════════════════════════
-print("\n[7] Fixing workflow dropdown...")
+print("\n[3] Improving dropdown labels...")
 
-old_dropdown = '''if (data.workflows && data.workflows.length > 0) {
-            const scheduled = data.workflows.filter(w => w.mode === 'scheduled');
-            const once = data.workflows.filter(w => w.mode !== 'scheduled');
-            
-            if (scheduled.length > 0) {
-                const schedGroup = document.createElement('optgroup');
-                schedGroup.label = '🔄 Scheduled';
-                scheduled.forEach(w => {
-                    const opt = document.createElement('option');
-                    opt.value = w.name;
-                    opt.textContent = w.name + (w.schedule ? ` [${w.schedule}]` : '');
-                    schedGroup.appendChild(opt);
-                });
-                selector.appendChild(schedGroup);
-            }
-            
-            if (once.length > 0) {
-                const onceGroup = document.createElement('optgroup');
-                onceGroup.label = '▶ One-shot';
-                once.forEach(w => {
-                    const opt = document.createElement('option');
-                    opt.value = w.name;
-                    opt.textContent = w.name;
-                    onceGroup.appendChild(opt);
-                });
-                selector.appendChild(onceGroup);
-            }
-        }'''
+old_dropdown = '''opt.textContent = (mode === 'scheduled' ? '🔄 ' : '') + name + (schedule ? ` [${schedule}]` : '');'''
 
-new_dropdown = '''if (data.workflows && data.workflows.length > 0) {
-            data.workflows.forEach(w => {
-                const opt = document.createElement('option');
-                opt.value = w.name;
-                opt.textContent = (w.mode === 'scheduled' ? '🔄 ' : '') + w.name + (w.schedule ? ` [${w.schedule}]` : '');
-                selector.appendChild(opt);
-            });
-        }'''
+new_dropdown = '''let timeLabel = '';
+                if (mode === 'scheduled' && schedule) {
+                    try {
+                        const parts = schedule.trim().split(/\\s+/);
+                        if (parts.length === 5) {
+                            const min = parseInt(parts[0]) || 0;
+                            const hour24 = parseInt(parts[1]) || 0;
+                            let h12, ap;
+                            if (hour24 === 0) { h12 = 12; ap = 'AM'; }
+                            else if (hour24 === 12) { h12 = 12; ap = 'PM'; }
+                            else if (hour24 < 12) { h12 = hour24; ap = 'AM'; }
+                            else { h12 = hour24 - 12; ap = 'PM'; }
+                            timeLabel = ` — ${h12}:${String(min).padStart(2,'0')} ${ap}`;
+                        }
+                    } catch (_) {}
+                }
+                opt.textContent = (mode === 'scheduled' ? '🔄 ' : '') + name + timeLabel;'''
 
 if old_dropdown in html:
     html = html.replace(old_dropdown, new_dropdown, 1)
     changes += 1
-    print("  OK — dropdown simplified with 🔄 prefix for scheduled")
-else:
-    print("  SKIP — dropdown pattern not matched")
-
-# ═══════════════════════════════════════════════════════════════
-# 8. Remove old scheduleCurrentWorkflow function (no longer called)
-# ═══════════════════════════════════════════════════════════════
-print("\n[8] Removing old scheduleCurrentWorkflow...")
-
-old_fn_pattern = re.compile(
-    r"async function scheduleCurrentWorkflow\(\) \{[\s\S]*?toast\([^;]*\);\s*\}",
-    re.DOTALL
-)
-
-if old_fn_pattern.search(html):
-    html = old_fn_pattern.sub(
-        "// scheduleCurrentWorkflow deprecated — use openScheduleModal() instead",
-        html, count=1
-    )
-    changes += 1
-    print("  OK — deprecated scheduleCurrentWorkflow stubbed out")
-
-# ═══════════════════════════════════════════════════════════════
-# Write
-# ═══════════════════════════════════════════════════════════════
-print("\n[9] Writing...")
+    print("  OK — dropdown shows friendly time (e.g. '🔄 daily-report — 9:00 AM')")
 
 with open(HTML, 'w', encoding='utf-8') as f:
     f.write(html)
 
-print("  OK — wrote {} chars".format(len(html)))
-print("  {} change(s) applied".format(changes))
-
 # ═══════════════════════════════════════════════════════════════
 # Verify
 # ═══════════════════════════════════════════════════════════════
-print("\n[10] Verifying...")
+print("\n[4] Verifying...")
 
 final = open(HTML, 'r', encoding='utf-8').read()
 
 checks = [
-    ("Sidebar mode field removed",       'id="workflowMode"' not in final),
-    ("Sidebar schedule field removed",   'id="workflowSchedule"' not in final),
-    ("Schedule button uses modal",       'openScheduleModal()' in final),
-    ("openScheduleModal defined",        'async function openScheduleModal' in final),
-    ("updateScheduleBadge defined",      'function updateScheduleBadge' in final),
-    ("Modal has cron input",             'modalSchedCron' in final),
-    ("Modal has mode selector",          'modalSchedMode' in final),
-    ("Badge element in button",          'id="schedBadge"' in final),
-    ("Dropdown shows 🔄 prefix",         "🔄 ' + w.name" in final),
-    ("Old schedule function stubbed",    'scheduleCurrentWorkflow deprecated' in final or 'scheduleCurrentWorkflow(' not in final),
+    ("12-hour hour picker",        'id="modalHour"' in final),
+    ("12-hour minute picker",      'id="modalMin"' in final),
+    ("AM/PM selector",             'id="modalAmPm"' in final),
+    ("No mode dropdown",           'id="modalSchedMode"' not in final),
+    ("Preview updates on change",  'function updatePreview()' in final),
+    ("Converts 12h to cron",       'hour24 = (h === 12) ? 0 : h' in final),
+    ("Badge shows friendly time",  'badge.textContent = label' in final),
+    ("Dropdown shows friendly",    'timeLabel = ` — ${h12}:' in final),
+    ("Stop Schedule button",       'id="modalRemoveBtn"' in final),
+    ("Save Schedule button",       'id="modalSaveBtn"' in final),
 ]
 
 all_ok = True
@@ -494,11 +346,10 @@ if all_ok:
     print("=" * 55)
     print("PATCH COMPLETE")
     print("=" * 55)
-    print()
-    print("Next:")
+    print("\nNext:")
     print("  git add public/index.html")
-    print("  git commit -m 'Scheduler: modal UI inside Schedule button'")
+    print("  git commit -m 'Schedule modal: 12-hour time picker, no mode dropdown'")
     print("  git push origin main")
 else:
     print("Review FAIL lines above")
-    print("Backup at index.html.backup_schedmodal")
+    print("Backup: index.html.backup_simple_sched")
