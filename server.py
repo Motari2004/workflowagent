@@ -1431,6 +1431,30 @@ def ai_models():
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @app.route('/ai-chat', methods=['POST', 'OPTIONS'])
 def ai_chat():
     """Simple Gemini chat proxy — no credentials needed on the client."""
@@ -1469,21 +1493,65 @@ def ai_chat():
         "### BUILD WORKFLOWS\n"
         "Format: list of {type, data} nodes\n"
         "Nodes: trigger/webhook, action/http, logic/code, tool/integration, output/console\n\n"
+
         "For research + delivery:\n"
-        "  url: 'http://127.0.0.1:10000/api/remote_chat'\n"
+        "  url: '/api/remote_chat'\n"
         "  method: 'POST'\n"
         "  body: JSON string with message/session_id/voice\n"
         "  headers: JSON string with Content-Type\n"
-        "Response field: data.response\n\n"
+        "Response shape: {\"status\":\"success\", \"response\":\"<inner-json-string>\"}\n"
+        "  → The Code node's `data` variable is auto-flattened to the inner payload,\n"
+        "    so use `data.jobs`, `data.status`, NOT `data.response.jobs`.\n\n"
 
-        "### CODE NODES\n"
-        "Check for [ERROR], extract JSON with regex, then JSON.parse\n\n"
+        "### CODE NODES (JavaScript)\n"
+        "Every JS Code node runs in a sandbox with THREE variables:\n"
+        "  - input:  STRING — raw text from the previous node (may start with 'HTTP 200: ')\n"
+        "  - data:   OBJECT|null — input auto-parsed as JSON. If input looked like\n"
+        "            {status, response}, the runtime recursively parses `.response`.\n"
+        "            So `data` always ends up as the INNER payload (e.g. {jobs:[...]}).\n"
+        "  - output: FUNCTION — call output(value) to pass a result to the next node.\n\n"
+
+        "HARD RULES for JS Code nodes:\n"
+        "  1. NO require(), fs, path, process, Buffer, or any Node.js builtin.\n"
+        "     Allowed globals: JSON, Math, Date, String, Array, Object, RegExp,\n"
+        "                     Promise, console.log (goes to stderr).\n"
+        "  2. NO `return` at top level — use `output(result)` instead.\n"
+        "  3. `data` may be null if input isn't JSON — always guard with:\n"
+        "     if (!data) { output('[ERROR] no JSON'); } else { ... }\n"
+        "  4. EVERY code node MUST end with output(...).\n"
+        "  5. Do NOT use `data.response.jobs` — use `data.jobs` (already flattened).\n\n"
+
+        "CANONICAL EXAMPLE — extract jobs from Remotive and format for email:\n"
+        "```javascript\n"
+        "if (!data || !data.jobs) {\n"
+        "  output('[ERROR] No jobs in response');\n"
+        "} else {\n"
+        "  const top3 = data.jobs.slice(0, 3);\n"
+        "  const lines = top3.map(function(j) {\n"
+        "    return '• ' + (j.title || 'Unknown') + ' – ' + (j.company_name || 'Unknown') + '\\n' +\n"
+        "           '  Location: ' + (j.candidate_required_location || 'Unknown') + '\\n' +\n"
+        "           '  URL: ' + (j.url || '');\n"
+        "  });\n"
+        "  output(lines.join('\\n\\n'));\n"
+        "}\n"
+        "```\n\n"
+
+        "When the previous node outputs JSON via HTTP request, `input` looks like\n"
+        "'HTTP 200: {...}' and `data` is the parsed object. You do NOT need to parse.\n\n"
 
         "### TOOLS\n"
-        "tool/integration message field MUST be empty string\n"
+        "tool/integration message field MUST be empty string \"\" — the tool node\n"
+        "automatically uses the previous node's output as its message.\n"
         "email/discord/slack/sheets -> tool/integration\n"
         "APIs -> action/http"
     )
+    
+    
+    
+    
+    
+    
+    
 
     if not message:
         return jsonify({"error": "no message"}), 400
