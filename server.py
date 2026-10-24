@@ -1482,8 +1482,20 @@ def wf_by_name(name):
         return jsonify(wf) if wf else (jsonify({"error":"not found"}), 404)
     if request.method == 'PUT':
         wf = request.json
-        if not wf or 'nodes' not in wf: return jsonify({"error":"invalid"}), 400
-        save_workflow(name, wf); return jsonify({"status":"saved","name":name})
+        if not wf or 'nodes' not in wf:
+            return jsonify({"error":"invalid"}), 400
+        
+        # Merge preserve: keep mode/schedule/last_run_at if not in incoming payload
+        existing = load_workflow(name) or {}
+        if 'mode' not in wf:
+            wf['mode'] = existing.get('mode', 'once')
+        if 'schedule' not in wf:
+            wf['schedule'] = existing.get('schedule', '')
+        if 'last_run_at' not in wf:
+            wf['last_run_at'] = existing.get('last_run_at')
+        
+        save_workflow(name, wf)
+        return jsonify({"status":"saved","name":name})
     delete_workflow(name)
     return jsonify({"status":"deleted"})
 
