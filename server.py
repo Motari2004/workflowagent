@@ -1060,51 +1060,72 @@ def tool_buffer(creds, msg, extra):
 
 
 def tool_zernio(creds, msg, extra):
-    """Post to Zernio. Requires api_key (sk_...) and account_id from GET /v1/accounts."""
-    token = creds.get('api_key')
-    account_id = creds.get('account_id')
+    """Post to Zernio. Requires api_key (sk_...) and account_id.
+    platform comes from extra (node data) - defaults to instagram.
+    """
+    token = creds.get("api_key")
+    account_id = creds.get("account_id")
 
     if not token:
         return "[ERROR] Zernio: api_key not configured (starts with sk_)"
     if not account_id:
         return "[ERROR] Zernio: account_id not configured (get from GET /v1/accounts)"
-    if not (msg or '').strip():
+    if not (msg or "").strip():
         return "[ERROR] Zernio: no content to post"
+
+    platform = (
+        (extra or {}).get("platform")
+        or creds.get("platform")
+        or "instagram"
+    )
+    platform = str(platform).strip().lower()
+
+    valid_platforms = {
+        "instagram", "facebook", "tiktok", "twitter", "linkedin",
+        "threads", "pinterest", "youtube", "reddit", "bluesky",
+        "telegram", "snapchat", "whatsapp", "discord", "slack",
+    }
+    if platform not in valid_platforms:
+        return (
+            "[ERROR] Zernio: invalid platform " + platform + ". "
+            "Must be one of: " + ", ".join(sorted(valid_platforms))
+        )
 
     text = msg.strip()
 
     try:
         r = requests.post(
-            'https://zernio.com/api/v1/posts',
+            "https://zernio.com/api/v1/posts",
             headers={
-                'Authorization': f'Bearer {token}',
-                'Content-Type': 'application/json',
+                "Authorization": "Bearer " + token,
+                "Content-Type": "application/json",
             },
             json={
-                'content': text,
-                'publishNow': True,
-                'platforms': [{'accountId': account_id}],
+                "content": text,
+                "publishNow": True,
+                "platform": platform,
+                "platforms": [{"accountId": account_id, "platform": platform}],
             },
             timeout=20,
         )
     except requests.exceptions.Timeout:
         return "[ERROR] Zernio: timeout (20s)"
     except requests.exceptions.RequestException as e:
-        return f"[ERROR] Zernio: network: {e}"
+        return "[ERROR] Zernio: network: " + str(e)
 
     if r.status_code in (200, 201):
         try:
             data = r.json()
-            post_id = data.get('_id') or data.get('id', '?')
-            return f"Zernio {r.status_code}: posted (id={post_id})"
+            post_id = data.get("_id") or data.get("id", "?")
+            return "Zernio " + str(r.status_code) + ": posted to " + platform + " (id=" + str(post_id) + ")"
         except Exception:
-            return f"Zernio {r.status_code}: posted"
+            return "Zernio " + str(r.status_code) + ": posted to " + platform
 
     if r.status_code == 401:
-        return "[ERROR] Zernio: 401 Unauthorized — check API key"
+        return "[ERROR] Zernio: 401 Unauthorized - check API key"
     if r.status_code == 409:
         return "[ERROR] Zernio: 409 duplicate content (same content posted within 24h)"
-    return f"[ERROR] Zernio {r.status_code}: {r.text[:300]}"
+    return "[ERROR] Zernio " + str(r.status_code) + ": " + r.text[:300]
 
 
 TOOL_HANDLERS = {
@@ -1370,7 +1391,14 @@ def execute_workflow(nodes, extra_input=None):
                         raw_msg = ''
                     
                     msg = raw_msg or current_memory
-                    result = handler(creds, msg, node_data.get('extra') or {})
+                    tool_extra = {}
+                    if node_data.get('extra'):
+                        tool_extra.update(node_data['extra'])
+                    if node_data.get('config'):
+                        tool_extra.update(node_data['config'])
+                    if node_data.get('platform'):
+                        tool_extra['platform'] = node_data['platform']
+                    result = handler(creds, msg, tool_extra)
                     current_memory = result
                     logs.append(result)
 
@@ -2096,7 +2124,16 @@ def ai_chat():
                 "role": "user" if role == "user" else "model",
                 "parts": [{"text": text}]
             })
-        contents.append({"role": "user", "parts": [{"text": message}]})
+        # Only append current message if frontend didn't already include it
+        already_included = False
+        if contents:
+            last = contents[-1]
+            if last.get("role") == "user":
+                parts = last.get("parts", [])
+                if parts and parts[0].get("text", "").strip() == message.strip():
+                    already_included = True
+        if not already_included:
+            contents.append({"role": "user", "parts": [{"text": message}]})
         
         # Route to provider
         if provider == 'gemini':
