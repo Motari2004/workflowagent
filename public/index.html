@@ -2967,12 +2967,64 @@ async function openEditCredsModal(service) {
         // Remove any prior modal
         document.querySelectorAll('.modal-overlay').forEach(m => m.remove());
 
-        const fieldsHtml = tool.creds.length > 0
-            ? tool.creds.map(k => {
-                const val = (existing[k] || '').toString().replace(/"/g, '&quot;');
-                return `<label>${k.replace(/_/g, ' ')}</label><input name="${k}" value="${val}" autocomplete="off" />`;
-            }).join('')
-            : '<p class="text-xs text-slate-500">This tool requires no credentials.</p>';
+        let fieldsHtml;
+
+        if (service === 'buffer') {
+            // ── Buffer: live org/channel dropdowns ──
+            let bs = { organizations: [], channels: [], error: null, api_key_set: false };
+            try {
+                const bres = await fetch('/buffer/channels');
+                if (bres.ok) bs = await bres.json();
+            } catch (e) { bs.error = e.message; }
+
+            const apiKeyVal = (existing['api_key'] || '').toString().replace(/"/g, '&quot;');
+            const currentOrgId = existing['organization_id'] || '';
+            const currentChannelId = existing['channel_id'] || '';
+
+            fieldsHtml = `<label>api key</label>
+                <input name="api_key" value="${apiKeyVal}" autocomplete="off" placeholder="from publish.buffer.com/settings/api" />`;
+
+            if (bs.organizations && bs.organizations.length > 0) {
+                const opts = bs.organizations.map(o =>
+                    `<option value="${o.id}" ${o.id === currentOrgId ? 'selected' : ''}>${o.name || '(unnamed)'}</option>`
+                ).join('');
+                fieldsHtml += `<label style="margin-top:12px;">organization</label>
+                    <select name="organization_id" class="pro-input" style="width:100%; height:38px;">
+                        <option value="">-- choose organization --</option>
+                        ${opts}
+                    </select>`;
+            } else {
+                fieldsHtml += `<label style="margin-top:12px;">organization id</label>
+                    <input name="organization_id" value="${(currentOrgId || '').replace(/"/g, '&quot;')}" autocomplete="off" />`;
+                if (bs.error) {
+                    fieldsHtml += `<div style="font-size:10px; color:#f59e0b; margin-top:4px;">${bs.error}</div>`;
+                } else if (!bs.api_key_set) {
+                    fieldsHtml += `<div style="font-size:10px; color:#94a3b8; margin-top:4px;">Save API key first, then re-open to load organizations.</div>`;
+                }
+            }
+
+            if (bs.channels && bs.channels.length > 0) {
+                const opts = bs.channels.map(c =>
+                    `<option value="${c.id}" ${c.id === currentChannelId ? 'selected' : ''}>${c.service.toUpperCase()} — ${c.name}</option>`
+                ).join('');
+                fieldsHtml += `<label style="margin-top:12px;">channel to post to</label>
+                    <select name="channel_id" class="pro-input" style="width:100%; height:38px;">
+                        <option value="">-- choose channel --</option>
+                        ${opts}
+                    </select>`;
+            } else {
+                fieldsHtml += `<label style="margin-top:12px;">channel id</label>
+                    <input name="channel_id" value="${(currentChannelId || '').replace(/"/g, '&quot;')}" autocomplete="off" />`;
+            }
+        } else {
+            // ── Generic: one input per credential key ──
+            fieldsHtml = tool.creds.length > 0
+                ? tool.creds.map(k => {
+                    const val = (existing[k] || '').toString().replace(/"/g, '&quot;');
+                    return `<label>${k.replace(/_/g, ' ')}</label><input name="${k}" value="${val}" autocomplete="off" />`;
+                }).join('')
+                : '<p class="text-xs text-slate-500">This tool requires no credentials.</p>';
+        }
 
         const overlay = document.createElement('div');
         overlay.className = 'modal-overlay';
@@ -3007,7 +3059,6 @@ async function openEditCredsModal(service) {
                 if (res.ok) {
                     toast(`${tool.label} saved`, 'success');
                     overlay.remove();
-                    // Re-open main credentials panel with fresh badges
                     setTimeout(openCredentialsPanel, 100);
                 } else {
                     toast('Save failed: ' + res.status, 'error');

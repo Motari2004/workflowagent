@@ -1594,6 +1594,11 @@ def creds_service(service):
 
 
 
+@app.route('/buffer/channels', methods=['GET'])
+def buffer_channels():
+    return jsonify(_buffer_status())
+
+
 @app.route('/ai-models', methods=['GET'])
 def ai_models():
     """List available models and which ones are configured."""
@@ -2048,6 +2053,17 @@ def ai_chat():
                 print(f"[ai-chat] Loaded memory context ({len(memory_context)} chars)")
         except Exception as mem_err:
             print(f"[ai-chat] Memory load failed (non-fatal): {mem_err}")
+
+        # Live Buffer status
+        try:
+            msg_buf = (message or "").lower()
+            if any(k in msg_buf for k in ["buffer", "queue"]):
+                bs = _buffer_status()
+                system = system + _buffer_status_block(bs)
+                print(f"[ai-chat] Buffer status injected ({len(bs.get('channels', []))} channels)")
+        except Exception as b_err:
+            print(f"[ai-chat] Buffer status check failed: {b_err}")
+
 
         # Save the user's message to memory
         try:
