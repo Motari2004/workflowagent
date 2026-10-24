@@ -991,12 +991,21 @@ def execute_workflow(nodes, extra_input=None):
     print(f"  Done. Result: {final_data}")
     return {"status":"success","logs":logs,"data":final_data}
 
-# ---------- Routes ----------
+
+
+
+PUBLIC_DIR = Path(__file__).parent / 'public'
+
 @app.route('/')
-def index(): return send_from_directory('public', 'index.html')
+def index():
+    return send_from_directory(str(PUBLIC_DIR), 'index.html')
 
 @app.route('/<path:path>')
-def static_files(path): return send_from_directory('public', path)
+def static_files(path):
+    return send_from_directory(str(PUBLIC_DIR), path)
+
+
+
 
 @app.route('/run', methods=['POST','OPTIONS'])
 def run_workflow():
