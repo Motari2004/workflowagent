@@ -9,182 +9,162 @@ for f in [SERVER, HTML]:
     if not os.path.exists(f):
         print("FAIL: missing " + f); sys.exit(1)
 
-shutil.copy(SERVER, SERVER + '.backup_v5')
-shutil.copy(HTML, HTML + '.backup_v5')
+shutil.copy(SERVER, SERVER + '.backup_v6')
+shutil.copy(HTML, HTML + '.backup_v6')
 print("Backed up")
 
 sc = 0
 hc = 0
 
+# ============================================================
+# SERVER.PY
+# ============================================================
 with open(SERVER, 'r', encoding='utf-8') as f:
     server = f.read()
 
-# ============================================================
-# PATCH 1: tool_zernio - add platform support
-# ============================================================
-print("\n[1] Patching tool_zernio...")
+# ---------- PATCH 1: merge backend memory into contents ----------
+print("\n[1] Merging DB history into Gemini contents...")
 
-old_zernio = re.search(
-    r'def tool_zernio\(creds, msg, extra\):[\s\S]*?return f"\[ERROR\] Zernio \{r\.status_code\}: \{r\.text\[:300\]\}"',
-    server
-)
+old_contents = '''        # Build conversation
+        contents = []
+        for h in history[-10:]:
+            role = h.get('role', 'user')
+            text = h.get('text', '')
+            if not text:
+                continue
+            contents.append({
+                "role": "user" if role == "user" else "model",
+                "parts": [{"text": text}]
+            })'''
 
-if not old_zernio:
-    print("  FAIL: tool_zernio not found")
-    sys.exit(1)
+new_contents = '''        # Build conversation - combine frontend history + DB memory
+        contents = []
+        seen_texts = set()
 
-# Build replacement as a list of lines to avoid triple-quote issues
-zernio_lines = [
-    'def tool_zernio(creds, msg, extra):',
-    '    """Post to Zernio. Requires api_key (sk_...) and account_id.',
-    '    platform comes from extra (node data) - defaults to instagram.',
-    '    """',
-    '    token = creds.get("api_key")',
-    '    account_id = creds.get("account_id")',
-    '',
-    '    if not token:',
-    '        return "[ERROR] Zernio: api_key not configured (starts with sk_)"',
-    '    if not account_id:',
-    '        return "[ERROR] Zernio: account_id not configured (get from GET /v1/accounts)"',
-    '    if not (msg or "").strip():',
-    '        return "[ERROR] Zernio: no content to post"',
-    '',
-    '    platform = (',
-    '        (extra or {}).get("platform")',
-    '        or creds.get("platform")',
-    '        or "instagram"',
-    '    )',
-    '    platform = str(platform).strip().lower()',
-    '',
-    '    valid_platforms = {',
-    '        "instagram", "facebook", "tiktok", "twitter", "linkedin",',
-    '        "threads", "pinterest", "youtube", "reddit", "bluesky",',
-    '        "telegram", "snapchat", "whatsapp", "discord", "slack",',
-    '    }',
-    '    if platform not in valid_platforms:',
-    '        return (',
-    '            "[ERROR] Zernio: invalid platform " + platform + ". "',
-    '            "Must be one of: " + ", ".join(sorted(valid_platforms))',
-    '        )',
-    '',
-    '    text = msg.strip()',
-    '',
-    '    try:',
-    '        r = requests.post(',
-    '            "https://zernio.com/api/v1/posts",',
-    '            headers={',
-    '                "Authorization": "Bearer " + token,',
-    '                "Content-Type": "application/json",',
-    '            },',
-    '            json={',
-    '                "content": text,',
-    '                "publishNow": True,',
-    '                "platform": platform,',
-    '                "platforms": [{"accountId": account_id, "platform": platform}],',
-    '            },',
-    '            timeout=20,',
-    '        )',
-    '    except requests.exceptions.Timeout:',
-    '        return "[ERROR] Zernio: timeout (20s)"',
-    '    except requests.exceptions.RequestException as e:',
-    '        return "[ERROR] Zernio: network: " + str(e)',
-    '',
-    '    if r.status_code in (200, 201):',
-    '        try:',
-    '            data = r.json()',
-    '            post_id = data.get("_id") or data.get("id", "?")',
-    '            return "Zernio " + str(r.status_code) + ": posted to " + platform + " (id=" + str(post_id) + ")"',
-    '        except Exception:',
-    '            return "Zernio " + str(r.status_code) + ": posted to " + platform',
-    '',
-    '    if r.status_code == 401:',
-    '        return "[ERROR] Zernio: 401 Unauthorized - check API key"',
-    '    if r.status_code == 409:',
-    '        return "[ERROR] Zernio: 409 duplicate content (same content posted within 24h)"',
-    '    return "[ERROR] Zernio " + str(r.status_code) + ": " + r.text[:300]',
-]
+        def add_turn(role, text):
+            text = (text or '').strip()
+            if not text or text in seen_texts:
+                return
+            seen_texts.add(text)
+            contents.append({
+                "role": "user" if role == "user" else "model",
+                "parts": [{"text": text}]
+            })
 
-new_zernio = '\n'.join(zernio_lines)
+        # 1. DB memory (last 20 messages over 24h) - lowest priority, oldest first
+        try:
+            db_recent = memory_recent(hours=24, limit=20)
+            for m in db_recent:
+                add_turn(m.get('role', 'user'), m.get('text', ''))
+            if db_recent:
+                print(f"[ai-chat] Merged {len(db_recent)} DB memory turns")
+        except Exception as e:
+            print(f"[ai-chat] DB memory load failed: {e}")
 
-server = server.replace(old_zernio.group(0), new_zernio, 1)
-sc += 1
-print("  OK: tool_zernio now reads platform")
+        # 2. Frontend history (last 10 turns) - highest priority
+        for h in history[-10:]:
+            add_turn(h.get('role', 'user'), h.get('text', ''))'''
 
-# ============================================================
-# PATCH 2: pass platform/extra/config to handler
-# ============================================================
-print("\n[2] Passing platform to tool handler...")
-
-old_call = '''                    msg = raw_msg or current_memory
-                    result = handler(creds, msg, node_data.get('extra') or {})'''
-
-new_call = '''                    msg = raw_msg or current_memory
-                    tool_extra = {}
-                    if node_data.get('extra'):
-                        tool_extra.update(node_data['extra'])
-                    if node_data.get('config'):
-                        tool_extra.update(node_data['config'])
-                    if node_data.get('platform'):
-                        tool_extra['platform'] = node_data['platform']
-                    result = handler(creds, msg, tool_extra)'''
-
-if old_call in server:
-    server = server.replace(old_call, new_call, 1)
+if old_contents in server:
+    server = server.replace(old_contents, new_contents, 1)
     sc += 1
-    print("  OK: extra config passed to handler")
+    print("  OK: DB memory merged into contents")
 else:
-    print("  SKIP: handler call pattern not matched")
+    print("  SKIP: contents build pattern not matched")
 
-# ============================================================
-# PATCH 3: duplicate-message guard
-# ============================================================
-print("\n[3] Duplicate-message guard...")
+# ---------- PATCH 2: ensure bot messages saved for every provider ----------
+print("\n[2] Ensuring bot messages saved for all providers...")
 
-old_append = '''        contents.append({"role": "user", "parts": [{"text": message}]})
-        
-        # Route to provider'''
+# Gemini - already saves on success, but let's make it unconditional
+old_gemini_save = '''            if reply:
+                # Save AI reply to memory
+                try:
+                    memory_save_message("bot", reply.strip())
+                except Exception:
+                    pass
+                return jsonify({"reply": reply.strip(), "model": model_key})'''
 
-new_append = '''        # Only append current message if frontend didn't already include it
-        already_included = False
-        if contents:
-            last = contents[-1]
-            if last.get("role") == "user":
-                parts = last.get("parts", [])
-                if parts and parts[0].get("text", "").strip() == message.strip():
-                    already_included = True
-        if not already_included:
-            contents.append({"role": "user", "parts": [{"text": message}]})
-        
-        # Route to provider'''
+new_gemini_save = '''            if reply:
+                try:
+                    memory_save_message("bot", reply.strip())
+                except Exception as e:
+                    print(f"[ai-chat] Bot memory save failed: {e}")
+                return jsonify({"reply": reply.strip(), "model": model_key})'''
 
-if old_append in server:
-    server = server.replace(old_append, new_append, 1)
+if old_gemini_save in server:
+    server = server.replace(old_gemini_save, new_gemini_save, 1)
     sc += 1
-    print("  OK: duplicate-message guard added")
+    print("  OK: Gemini bot message save confirmed")
+
+# Ollama - has no bot save at all
+old_ollama = '''            if reply:
+                return jsonify({"reply": reply.strip(), "model": model_key})
+            return jsonify({"error": f"Ollama failed for model {model_name}"}), 500'''
+
+new_ollama = '''            if reply:
+                try:
+                    memory_save_message("bot", reply.strip())
+                except Exception as e:
+                    print(f"[ai-chat] Ollama bot memory save failed: {e}")
+                return jsonify({"reply": reply.strip(), "model": model_key})
+            return jsonify({"error": f"Ollama failed for model {model_name}"}), 500'''
+
+if old_ollama in server:
+    server = server.replace(old_ollama, new_ollama, 1)
+    sc += 1
+    print("  OK: Ollama bot message save added")
 else:
-    print("  SKIP: append pattern not matched")
+    print("  SKIP: Ollama save pattern not matched")
 
-# ============================================================
-# Compile check (server)
-# ============================================================
-print("\n[4] Compile check...")
+# ---------- PATCH 3: add /ai-chat/history endpoint ----------
+print("\n[3] Adding /ai-chat/history endpoint...")
 
-try:
-    compile(server, SERVER, 'exec')
-    print("  [OK  ] server compiles")
-except SyntaxError as e:
-    print("  [FAIL] line {}: {}".format(e.lineno, e.msg))
-    print("  Context: {}".format(repr(server.splitlines()[e.lineno - 1] if e.lineno else '')))
-    print("  Restored from backup")
-    shutil.copy(SERVER + '.backup_v5', SERVER)
-    sys.exit(1)
+if '@app.route(\'/ai-chat/history\'' not in server:
+    # Insert before /ai-memory/facts
+    anchor = "@app.route('/ai-memory/facts', methods=['GET', 'PUT'])"
+    history_endpoint = '''@app.route('/ai-chat/history', methods=['GET'])
+def ai_chat_history():
+    """Return the last N conversation turns for the frontend to restore."""
+    limit = int(request.args.get('limit', 20))
+    try:
+        msgs = memory_recent(hours=24 * 7, limit=limit)
+        result = []
+        for m in msgs:
+            result.append({
+                "role": m.get("role", "user"),
+                "text": m.get("text", ""),
+                "ts": m.get("ts", "")
+            })
+        return jsonify({"history": result, "count": len(result)})
+    except Exception as e:
+        return jsonify({"error": str(e), "history": []}), 500
+
+
+@app.route('/ai-memory/facts', methods=['GET', 'PUT'])'''
+
+    if anchor in server:
+        server = server.replace(anchor, history_endpoint, 1)
+        sc += 1
+        print("  OK: /ai-chat/history endpoint added")
+    else:
+        print("  FAIL: anchor not found for history endpoint")
+else:
+    print("  SKIP: /ai-chat/history already exists")
 
 with open(SERVER, 'w', encoding='utf-8') as f:
     f.write(server)
-print("  OK: server.py written")
+
+try:
+    compile(open(SERVER, 'r', encoding='utf-8').read(), SERVER, 'exec')
+    print("\n  [OK  ] server.py compiles")
+except SyntaxError as e:
+    print("\n  [FAIL] line {}: {}".format(e.lineno, e.msg))
+    shutil.copy(SERVER + '.backup_v6', SERVER)
+    print("  Restored from backup")
+    sys.exit(1)
 
 # ============================================================
-# INDEX.HTML - platform widget
+# INDEX.HTML
 # ============================================================
 print("\n" + "=" * 55)
 print("INDEX.HTML")
@@ -193,85 +173,62 @@ print("=" * 55)
 with open(HTML, 'r', encoding='utf-8') as f:
     html = f.read()
 
-# NodeTool with platform widget
-print("\n[5] NodeTool platform widget...")
+# ---------- PATCH 4: load server history on page load ----------
+print("\n[4] Loading server history on page load...")
 
-old_nt = re.search(
-    r'function NodeTool\(\) \{[\s\S]*?applyNodeTheme\(this, NODE_THEME\.tool\);[^\}]*\}',
-    html
-)
+# Find the init section where renderHistory() is called
+old_init = '''    // ---- Initial render ----
+    renderHistory();
+    console.log('[ai] AI panel ready');'''
 
-if old_nt and 'platformWidget' not in old_nt.group(0):
-    new_nt_lines = [
-        'function NodeTool() {',
-        '    this.properties = { service:"discord", message:"", platform:"instagram" };',
-        '    this.addInput("in","string"); this.addOutput("out","string");',
-        '    const names = Object.keys(TOOLS);',
-        '    this.addWidget("combo","Service","discord", v => this.properties.service = v, { values:names });',
-        '    this.addWidget("text","Message (opt)","", v => this.properties.message = v);',
-        '    this.platformWidget = this.addWidget("combo","Platform","instagram", v => this.properties.platform = v, {',
-        '        values: ["instagram","facebook","tiktok","twitter","linkedin","threads","pinterest","youtube","reddit","bluesky","telegram","snapchat","whatsapp","discord","slack"]',
-        '    });',
-        '    this.title = "Tool";',
-        '    applyNodeTheme(this, NODE_THEME.tool);',
-        '}',
-    ]
-    new_nt = '\n'.join(new_nt_lines)
-    html = html.replace(old_nt.group(0), new_nt, 1)
+new_init = '''    // ---- Initial render ----
+    renderHistory();
+
+    // ---- Load persistent history from server ----
+    async function loadServerHistory() {
+        try {
+            const res = await fetch('/ai-chat/history?limit=20');
+            if (!res.ok) return;
+            const data = await res.json();
+            const serverMsgs = data.history || [];
+            if (serverMsgs.length === 0) return;
+
+            // If localStorage already has history, prefer whichever is longer
+            if (history.length >= serverMsgs.length) {
+                console.log('[ai] localStorage history is current:', history.length);
+                return;
+            }
+
+            // Convert server format to frontend format
+            const converted = serverMsgs.map(m => ({
+                role: m.role === 'bot' ? 'bot' : 'user',
+                text: m.text || ''
+            }));
+
+            history = converted;
+            saveHistory();
+            renderHistory();
+            console.log('[ai] Loaded', converted.length, 'messages from server');
+        } catch (e) {
+            console.warn('[ai] Could not load server history:', e);
+        }
+    }
+    loadServerHistory();
+
+    console.log('[ai] AI panel ready');'''
+
+if old_init in html:
+    html = html.replace(old_init, new_init, 1)
     hc += 1
-    print("  OK: platform widget added")
+    print("  OK: server history loads on panel init")
 else:
-    print("  SKIP: platform widget already present or NodeTool not found")
-
-# onConfigure restore
-print("\n[6] onConfigure platform restore...")
-
-if 'this.properties.platform = info.properties.platform' not in html:
-    pm = re.search(
-        r'(NodeTool\.prototype\.onConfigure\s*=\s*function\(info\)\s*\{[\s\S]*?if\s*\(typeof info\.properties\.message\s*===\s*["\']string["\']\)\s*this\.properties\.message\s*=\s*info\.properties\.message;)',
-        html
-    )
-    if pm:
-        old = pm.group(1)
-        new = old + '\n        if (typeof info.properties.platform === "string") this.properties.platform = info.properties.platform;'
-        html = html.replace(old, new, 1)
-        hc += 1
-        print("  OK: platform restored in onConfigure")
-
-if 'w.name === "Platform"' not in html:
-    wm = re.search(
-        r'(if\s*\(w\.name\s*===\s*"Message \(opt\)"\)\s*w\.value\s*=\s*this\.properties\.message\s*\|\|\s*"";)',
-        html
-    )
-    if wm:
-        old = wm.group(1)
-        new = old + '\n            else if (w.name === "Platform") w.value = this.properties.platform || "instagram";'
-        html = html.replace(old, new, 1)
-        hc += 1
-        print("  OK: platform in widget sync loop")
-
-# buildPayload
-print("\n[7] buildPayload platform...")
-
-if 'platform: d.platform' not in html and 'platform:d.platform' not in html:
-    bm = re.search(
-        r"case 'tool/integration':\s*payload\.push\(\{type:'tool',\s*data:\{service:d\.service\|\|'http-custom',\s*message:d\.message\|\|''\}\}\);",
-        html
-    )
-    if bm:
-        old = bm.group(0)
-        new = "case 'tool/integration': payload.push({type:'tool', data:{service:d.service||'http-custom', message:d.message||'', platform:d.platform||'instagram'}});"
-        html = html.replace(old, new, 1)
-        hc += 1
-        print("  OK: buildPayload includes platform")
-    else:
-        print("  FAIL: buildPayload pattern not matched")
+    print("  SKIP: initial render pattern not matched")
 
 with open(HTML, 'w', encoding='utf-8') as f:
     f.write(html)
 
 # ============================================================
-# Verify
+# VERIFY
 # ============================================================
 print("\n" + "=" * 55)
 print("VERIFICATION")
@@ -281,12 +238,13 @@ fs = open(SERVER, 'r', encoding='utf-8').read()
 fh = open(HTML, 'r', encoding='utf-8').read()
 
 checks = [
-    ("server: tool_zernio reads platform", "valid_platforms" in fs),
-    ("server: handler passes extra",       "tool_extra['platform']" in fs),
-    ("server: dup guard",                  "already_included = False" in fs),
-    ("html: platform widget",              'this.platformWidget' in fh),
-    ("html: buildPayload platform",        "platform:d.platform" in fh or "platform: d.platform" in fh),
-    ("html: onConfigure platform",         "this.properties.platform = info.properties.platform" in fh),
+    ("server: DB memory merged",        "Merged" in fs and "DB memory" in fs),
+    ("server: /ai-chat/history route",  "@app.route('/ai-chat/history'" in fs),
+    ("server: Ollama bot save",         "Ollama bot memory save" in fs),
+    ("server: dedup logic",             "seen_texts" in fs),
+    ("html: server history loader",     "loadServerHistory" in fh),
+    ("html: fetches /ai-chat/history",  "fetch('/ai-chat/history" in fh),
+    ("html: prefers longer history",    "history.length >= serverMsgs.length" in fh),
 ]
 
 ok = True
@@ -303,7 +261,7 @@ if ok:
     print()
     print("Next:")
     print("  git add server.py public/index.html")
-    print("  git commit -m 'Zernio platform + dup guard'")
+    print("  git commit -m 'AI: persistent conversation memory across reloads'")
     print("  git push origin main")
 else:
-    print("Review FAIL lines. Backups: *.backup_v5")
+    print("Review FAIL lines above. Backups: *.backup_v6")

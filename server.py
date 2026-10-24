@@ -2113,17 +2113,33 @@ def ai_chat():
         
         print(f"[ai-chat] Requested model: {model_key} → provider={provider}, model={model_name}")
         
-        # Build conversation
+        # Build conversation - combine frontend history + DB memory
         contents = []
-        for h in history[-10:]:
-            role = h.get('role', 'user')
-            text = h.get('text', '')
-            if not text:
-                continue
+        seen_texts = set()
+
+        def add_turn(role, text):
+            text = (text or '').strip()
+            if not text or text in seen_texts:
+                return
+            seen_texts.add(text)
             contents.append({
                 "role": "user" if role == "user" else "model",
                 "parts": [{"text": text}]
             })
+
+        # 1. DB memory (last 20 messages over 24h) - lowest priority, oldest first
+        try:
+            db_recent = memory_recent(hours=24, limit=20)
+            for m in db_recent:
+                add_turn(m.get('role', 'user'), m.get('text', ''))
+            if db_recent:
+                print(f"[ai-chat] Merged {len(db_recent)} DB memory turns")
+        except Exception as e:
+            print(f"[ai-chat] DB memory load failed: {e}")
+
+        # 2. Frontend history (last 10 turns) - highest priority
+        for h in history[-10:]:
+            add_turn(h.get('role', 'user'), h.get('text', ''))
         # Only append current message if frontend didn't already include it
         already_included = False
         if contents:
@@ -2153,11 +2169,10 @@ def ai_chat():
                 model_name=model_name
             )
             if reply:
-                # Save AI reply to memory
                 try:
                     memory_save_message("bot", reply.strip())
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[ai-chat] Bot memory save failed: {e}")
                 return jsonify({"reply": reply.strip(), "model": model_key})
             # Fallback to Ollama on Gemini failure
             print("[ai-chat] Gemini failed, trying Ollama fallback")
@@ -2202,6 +2217,10 @@ def ai_chat():
                 reply = _ollama_call(message, system, model_override=model_name)
             
             if reply:
+                try:
+                    memory_save_message("bot", reply.strip())
+                except Exception as e:
+                    print(f"[ai-chat] Ollama bot memory save failed: {e}")
                 return jsonify({"reply": reply.strip(), "model": model_key})
             return jsonify({"error": f"Ollama failed for model {model_name}"}), 500
         
@@ -2262,6 +2281,24 @@ def remote_chat():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/ai-chat/history', methods=['GET'])
+def ai_chat_history():
+    """Return the last N conversation turns for the frontend to restore."""
+    limit = int(request.args.get('limit', 20))
+    try:
+        msgs = memory_recent(hours=24 * 7, limit=limit)
+        result = []
+        for m in msgs:
+            result.append({
+                "role": m.get("role", "user"),
+                "text": m.get("text", ""),
+                "ts": m.get("ts", "")
+            })
+        return jsonify({"history": result, "count": len(result)})
+    except Exception as e:
+        return jsonify({"error": str(e), "history": []}), 500
 
 
 @app.route('/ai-memory/facts', methods=['GET', 'PUT'])

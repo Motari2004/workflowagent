@@ -4119,6 +4119,38 @@ console.log("=== SCRIPT READY ===");
 
         // ---- Initial render ----
     renderHistory();
+
+    // ---- Load persistent history from server ----
+    async function loadServerHistory() {
+        try {
+            const res = await fetch('/ai-chat/history?limit=20');
+            if (!res.ok) return;
+            const data = await res.json();
+            const serverMsgs = data.history || [];
+            if (serverMsgs.length === 0) return;
+
+            // If localStorage already has history, prefer whichever is longer
+            if (history.length >= serverMsgs.length) {
+                console.log('[ai] localStorage history is current:', history.length);
+                return;
+            }
+
+            // Convert server format to frontend format
+            const converted = serverMsgs.map(m => ({
+                role: m.role === 'bot' ? 'bot' : 'user',
+                text: m.text || ''
+            }));
+
+            history = converted;
+            saveHistory();
+            renderHistory();
+            console.log('[ai] Loaded', converted.length, 'messages from server');
+        } catch (e) {
+            console.warn('[ai] Could not load server history:', e);
+        }
+    }
+    loadServerHistory();
+
     console.log('[ai] AI panel ready');
 })();
 
