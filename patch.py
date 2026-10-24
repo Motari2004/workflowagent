@@ -2,154 +2,116 @@
 import os, shutil, sys, re
 
 PROJECT = r'C:\Users\PC\Desktop\modular\workflow-pro-v3'
-HTML = os.path.join(PROJECT, 'public', 'index.html')
+SERVER = os.path.join(PROJECT, 'server.py')
 
-if not os.path.exists(HTML):
-    print("FAIL: missing " + HTML); sys.exit(1)
+if not os.path.exists(SERVER):
+    print("FAIL: missing server.py"); sys.exit(1)
 
-shutil.copy(HTML, HTML + '.backup_v13')
+shutil.copy(SERVER, SERVER + '.backup_v14')
 print("Backed up")
 
-hc = 0
+with open(SERVER, 'r', encoding='utf-8') as f:
+    server = f.read()
 
-with open(HTML, 'r', encoding='utf-8') as f:
-    html = f.read()
-
-# ============================================================
-# PATCH 1: Add template sanitizer + hook into NodeTool.onConfigure
-# ============================================================
-print("\n[1] Adding template sanitizer to NodeTool...")
-
-# First, check what NodeTool.onConfigure looks like now
-existing_oc = re.search(
-    r'NodeTool\.prototype\.onConfigure\s*=\s*function\(info\)\s*\{[\s\S]*?\n\};',
-    html
-)
-
-if not existing_oc:
-    print("  FAIL: NodeTool.onConfigure not found")
-    sys.exit(1)
-
-# Replace the whole onConfigure with a version that sanitizes
-new_oc = '''NodeTool.prototype.onConfigure = function(info) {
-    // Clean any template syntax that a saved workflow might contain
-    function stripTemplates(str) {
-        if (typeof str !== 'string') return str;
-        // Remove ${...} and {{...}} patterns - these aren't supported
-        return str.replace(/\\$\\{[^}]*\\}/g, '').replace(/\\{\\{[^}]*\\}\\}/g, '').trim();
-    }
-    
-    if (info && info.properties) {
-        if (typeof info.properties.service === "string") this.properties.service = info.properties.service;
-        if (typeof info.properties.message === "string") this.properties.message = stripTemplates(info.properties.message);
-        if (typeof info.properties.platform === "string") this.properties.platform = info.properties.platform;
-        if (typeof info.properties.media_urls === "string") this.properties.media_urls = stripTemplates(info.properties.media_urls);
-    }
-    
-    // Sync widgets from cleaned properties
-    if (this.widgets) {
-        for (var i = 0; i < this.widgets.length; i++) {
-            var w = this.widgets[i];
-            if (w.name === "Service") w.value = this.properties.service || "discord";
-            else if (w.name === "Message (opt)") w.value = this.properties.message || "";
-            else if (w.name === "Platform") w.value = this.properties.platform || "instagram";
-            else if (w.name === "Media URL (opt)") w.value = this.properties.media_urls || "";
-        }
-    }
-};'''
-
-html = html.replace(existing_oc.group(0), new_oc, 1)
-hc += 1
-print("  OK: onConfigure sanitizes templates")
+sc = 0
 
 # ============================================================
-# PATCH 2: Add onWidgetChanged to strip templates while typing
+# PATCH 1: Fix the orphaned binary-save code block
 # ============================================================
-print("\n[2] Adding onWidgetChanged to strip templates on typing...")
+print("\n[1] Fixing orphaned image/audio block...")
 
-# Find NodeTool.onConfigure (which we just replaced) and add onWidgetChanged after it
-# Look for the closing of onConfigure
-oc_end_pattern = re.compile(
-    r'(NodeTool\.prototype\.onConfigure\s*=\s*function\(info\)\s*\{[\s\S]*?\n\};)',
-    re.DOTALL
-)
+old_binary = '''                        if 'audio/' in content_type or 'image/' in content_type or 'octet-stream' in content_type:
+                            # Image/audio URL responses: return the URL, do NOT download bytes.
+                            # Instagram/Zernio need URLs. Bytes-in-/tmp breaks on Vercel and
+                            # tool_zernio only accepts URLs anyway.
+                            current_memory = url
+                            logs.append(f"HTTP {r.status_code}: image/audio -> using URL {url[:80]}")
 
-m = oc_end_pattern.search(html)
-if m:
-    widget_changed = m.group(1) + '''
+                            current_memory = str(filepath.absolute())
+                            logs.append(f"HTTP {r.status_code}: saved binary to {filename} ({len(r.content)} bytes)")
+                        else:
+                            full_text = r.text
+                            preview = full_text[:250] + ('...' if len(full_text) > 250 else '')
+                            current_memory = f"HTTP {r.status_code}: {full_text}"
+                            logs.append(f"HTTP {r.status_code}: {preview}")'''
 
-NodeTool.prototype.onWidgetChanged = function(name, value, widget) {
-    // Strip template syntax as soon as the user types or pastes
-    function stripTemplates(str) {
-        if (typeof str !== 'string') return str;
-        return str.replace(/\\$\\{[^}]*\\}/g, '').replace(/\\{\\{[^}]*\\}\\}/g, '').trim();
-    }
-    
-    if (name === "Message (opt)") {
-        var cleaned = stripTemplates(value);
-        if (cleaned !== value) {
-            this.properties.message = cleaned;
-            if (widget) widget.value = cleaned;
-            if (this.graph && this.graph.canvas) this.graph.canvas.setDirty(true, true);
-            if (typeof toast === 'function') toast('Template syntax not supported - removed', 'warn', 2000);
-        }
-    } else if (name === "Media URL (opt)") {
-        var cleaned = stripTemplates(value);
-        if (cleaned !== value) {
-            this.properties.media_urls = cleaned;
-            if (widget) widget.value = cleaned;
-            if (this.graph && this.graph.canvas) this.graph.canvas.setDirty(true, true);
-            if (typeof toast === 'function') toast('Template syntax not supported - removed', 'warn', 2000);
-        }
-    }
-    // Call parent if exists
-    if (LGraphNode.prototype.onWidgetChanged) {
-        return LGraphNode.prototype.onWidgetChanged.apply(this, arguments);
-    }
-};'''
-    html = html.replace(m.group(1), widget_changed, 1)
-    hc += 1
-    print("  OK: onWidgetChanged strips templates on typing")
+new_binary = '''                        if 'audio/' in content_type or 'image/' in content_type or 'octet-stream' in content_type:
+                            # Return the URL instead of downloading bytes.
+                            current_memory = url
+                            logs.append(f"HTTP {r.status_code}: image/audio -> {url[:80]}")
+                        else:
+                            full_text = r.text
+                            preview = full_text[:250] + ('...' if len(full_text) > 250 else '')
+                            current_memory = f"HTTP {r.status_code}: {full_text}"
+                            logs.append(f"HTTP {r.status_code}: {preview}")'''
+
+if old_binary in server:
+    server = server.replace(old_binary, new_binary, 1)
+    sc += 1
+    print("  OK: removed orphaned filepath/filebytes lines")
 else:
-    print("  FAIL: could not find onConfigure closing bracket")
-    sys.exit(1)
+    print("  SKIP: block pattern not matched (may already be clean)")
 
 # ============================================================
-# PATCH 3: buildPayload strips templates before sending
+# PATCH 2: Verify tool_zernio has platform + media support
 # ============================================================
-print("\n[3] Stripping templates in buildPayload...")
+print("\n[2] Verifying tool_zernio platform+media...")
 
-old_bp = re.search(
-    r"case 'tool/integration':\s*\{[\s\S]*?break;\s*\}",
-    html
-)
+if 'media_urls' in server and 'valid_platforms' in server:
+    print("  OK: tool_zernio already has platform+media support")
+else:
+    print("  WARN: tool_zernio may be missing platform/media - please check manually")
 
-if not old_bp:
-    print("  FAIL: buildPayload tool case not found")
+# ============================================================
+# PATCH 3: Verify dispatcher passes media_urls
+# ============================================================
+print("\n[3] Verifying dispatcher passes media_urls...")
+
+if 'tool_extra[\'media_urls\'] = node_data[\'media_urls\']' in server or \
+   "tool_extra['media_urls'] = node_data['media_urls']" in server:
+    print("  OK: dispatcher passes media_urls")
+else:
+    # Add it if missing
+    old_disp = '''                    if node_data.get('platform'):
+                        tool_extra['platform'] = node_data['platform']
+                    result = handler(creds, msg, tool_extra)'''
+
+    new_disp = '''                    if node_data.get('platform'):
+                        tool_extra['platform'] = node_data['platform']
+                    if node_data.get('media_urls'):
+                        tool_extra['media_urls'] = node_data['media_urls']
+                    if node_data.get('mediaUrls'):
+                        tool_extra['media_urls'] = node_data['mediaUrls']
+                    result = handler(creds, msg, tool_extra)'''
+
+    if old_disp in server:
+        server = server.replace(old_disp, new_disp, 1)
+        sc += 1
+        print("  OK: added media_urls passthrough to dispatcher")
+    else:
+        print("  SKIP: dispatcher pattern not matched")
+
+# ============================================================
+# Compile check
+# ============================================================
+print("\n[4] Compile check...")
+
+try:
+    compile(server, SERVER, 'exec')
+    print("  [OK  ] server.py compiles")
+except SyntaxError as e:
+    print("  [FAIL] line {}: {}".format(e.lineno, e.msg))
+    lines = server.splitlines()
+    if e.lineno and e.lineno <= len(lines):
+        print("  Offending line: {}".format(repr(lines[e.lineno - 1])))
+    shutil.copy(SERVER + '.backup_v14', SERVER)
+    print("  Restored from backup")
     sys.exit(1)
 
-new_bp = '''case 'tool/integration': {
-                function stripT(str) {
-                    if (typeof str !== 'string') return str;
-                    return str.replace(/\\$\\{[^}]*\\}/g, '').replace(/\\{\\{[^}]*\\}\\}/g, '').trim();
-                }
-                const mediaStr = stripT(d.media_urls || '').trim();
-                const mediaList = mediaStr ? mediaStr.split(/[,\\n]+/).map(s => stripT(s.trim())).filter(Boolean) : [];
-                payload.push({type:'tool', data:{
-                    service: d.service||'http-custom',
-                    message: stripT(d.message || ''),
-                    platform: d.platform||'instagram',
-                    media_urls: mediaList
-                }});
-                break;
-            }'''
-
-html = html.replace(old_bp.group(0), new_bp, 1)
-hc += 1
-print("  OK: buildPayload strips templates")
-
-with open(HTML, 'w', encoding='utf-8') as f:
-    f.write(html)
+# Write
+with open(SERVER, 'w', encoding='utf-8') as f:
+    f.write(server)
+print("  OK: server.py written")
 
 # ============================================================
 # VERIFY
@@ -158,14 +120,14 @@ print("\n" + "=" * 55)
 print("VERIFICATION")
 print("=" * 55)
 
-fh = open(HTML, 'r', encoding='utf-8').read()
+fs = open(SERVER, 'r', encoding='utf-8').read()
 
 checks = [
-    ("onConfigure strips templates",       "stripTemplates(info.properties.message)" in fh or "stripTemplates(info.properties.media_urls)" in fh),
-    ("onWidgetChanged exists",             "NodeTool.prototype.onWidgetChanged" in fh),
-    ("buildPayload strips message",        "message: stripT(d.message || '')" in fh),
-    ("buildPayload strips media_urls",     "map(s => stripT(s.trim()))" in fh),
-    ("template removal regex present",     "replace(/\\\\$\\\\{[^}]*\\\\}/g, '')" in fh),
+    ("no orphaned filepath line",  "current_memory = str(filepath.absolute())" not in fs),
+    ("image/audio returns URL",    "image/audio ->" in fs),
+    ("tool_zernio has platform",   "valid_platforms" in fs),
+    ("tool_zernio has media",      "media_urls" in fs),
+    ("dispatcher passes media",    "tool_extra['media_urls']" in fs or 'tool_extra["media_urls"]' in fs),
 ]
 
 ok = True
@@ -178,11 +140,11 @@ if ok:
     print("=" * 55)
     print("PATCH COMPLETE")
     print("=" * 55)
-    print("html: {} changes".format(hc))
+    print("server: {} changes".format(sc))
     print()
     print("Next:")
-    print("  git add public/index.html")
-    print("  git commit -m 'Tool node: strip {{...}} and ${...} templates everywhere'")
+    print("  git add server.py")
+    print("  git commit -m 'Fix HTTP binary block + verify zernio media'")
     print("  git push origin main")
 else:
-    print("Review FAIL lines. Backup: index.html.backup_v13")
+    print("Review FAIL lines above. Backup: server.py.backup_v14")

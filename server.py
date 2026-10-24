@@ -1478,14 +1478,9 @@ def execute_workflow(nodes, extra_input=None):
                         # ---- Detect binary responses (audio, image, etc.) ----
                         content_type = r.headers.get('Content-Type', '')
                         if 'audio/' in content_type or 'image/' in content_type or 'octet-stream' in content_type:
-                            # Image/audio URL responses: return the URL, do NOT download bytes.
-                            # Instagram/Zernio need URLs. Bytes-in-/tmp breaks on Vercel and
-                            # tool_zernio only accepts URLs anyway.
+                            # Return the URL instead of downloading bytes.
                             current_memory = url
-                            logs.append(f"HTTP {r.status_code}: image/audio -> using URL {url[:80]}")
-
-                            current_memory = str(filepath.absolute())
-                            logs.append(f"HTTP {r.status_code}: saved binary to {filename} ({len(r.content)} bytes)")
+                            logs.append(f"HTTP {r.status_code}: image/audio -> {url[:80]}")
                         else:
                             full_text = r.text
                             preview = full_text[:250] + ('...' if len(full_text) > 250 else '')
