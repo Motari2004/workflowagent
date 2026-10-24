@@ -1,74 +1,177 @@
 import os, shutil, sys, re
 
-SERVER = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\server.py'
-if not os.path.exists(SERVER):
+HTML = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\public\index.html'
+
+if not os.path.exists(HTML):
     print("ERROR: not found"); sys.exit(1)
 
-shutil.copy(SERVER, SERVER + '.backup_merge')
+shutil.copy(HTML, HTML + '.backup_ai_nudge')
 print("Backed up\n")
 
-with open(SERVER, 'r', encoding='utf-8') as f:
-    code = f.read()
+with open(HTML, 'r', encoding='utf-8') as f:
+    html = f.read()
 
-old = '''@app.route('/workflows/<name>', methods=['GET','PUT','DELETE'])
-def wf_by_name(name):
-    if request.method == 'GET':
-        wf = load_workflow(name)
-        return jsonify(wf) if wf else (jsonify({"error":"not found"}), 404)
-    if request.method == 'PUT':
-        wf = request.json
-        if not wf or 'nodes' not in wf: return jsonify({"error":"invalid"}), 400
-        save_workflow(name, wf); return jsonify({"status":"saved","name":name})
-    delete_workflow(name)
-    return jsonify({"status":"deleted"})'''
+print("File: {} chars".format(len(html)))
+changes = 0
 
-new = '''@app.route('/workflows/<name>', methods=['GET','PUT','DELETE'])
-def wf_by_name(name):
-    if request.method == 'GET':
-        wf = load_workflow(name)
-        return jsonify(wf) if wf else (jsonify({"error":"not found"}), 404)
-    if request.method == 'PUT':
-        wf = request.json
-        if not wf or 'nodes' not in wf:
-            return jsonify({"error":"invalid"}), 400
-        
-        # Merge preserve: keep mode/schedule/last_run_at if not in incoming payload
-        existing = load_workflow(name) or {}
-        if 'mode' not in wf:
-            wf['mode'] = existing.get('mode', 'once')
-        if 'schedule' not in wf:
-            wf['schedule'] = existing.get('schedule', '')
-        if 'last_run_at' not in wf:
-            wf['last_run_at'] = existing.get('last_run_at')
-        
-        save_workflow(name, wf)
-        return jsonify({"status":"saved","name":name})
-    delete_workflow(name)
-    return jsonify({"status":"deleted"})'''
+# ═══════════════════════════════════════════════════════════════
+# Replace the collapsed header rules with vertical-centering-safe versions
+# ═══════════════════════════════════════════════════════════════
+print("[1] Removing previous collapsed-header rules if any...")
 
-if old in code:
-    code = code.replace(old, new, 1)
-    print("OK — PUT handler now merges mode/schedule")
+# Remove the whole "#aiPanel.collapsed #aiHeader {...} ... #aiPanel.collapsed #aiHeader #aiClearBtn {...}" block
+pattern = re.compile(
+    r"\s*/\* Collapsed: header fills the panel and centers all content \*/[\s\S]*?(?=#aiPanel\.collapsed #aiBody|/\*[^*]*\*/|#aiBody)",
+    re.DOTALL
+)
+if pattern.search(html):
+    html = pattern.sub("", html, count=1)
+    print("  OK — old collapsed header rules removed")
+
+print("\n[2] Adding refined centering rules...")
+
+# Anchor: right after the #aiPanel.collapsed block
+anchor = re.compile(
+    r"(#aiPanel\.collapsed \{[\s\S]*?\}\s*)",
+    re.DOTALL
+)
+
+new_rules = '''
+
+        /* ── Collapsed AI panel: force-vertical-center everything ── */
+        #aiPanel.collapsed {
+            height: 44px;
+            min-height: 44px;
+            max-height: 44px;
+        }
+        #aiPanel.collapsed #aiHeader {
+            height: 44px;
+            min-height: 44px;
+            padding: 0 10px 0 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            line-height: 1;
+            overflow: hidden;
+        }
+        #aiPanel.collapsed #aiHeader .ai-title {
+            align-items: center;
+            gap: 8px;
+            line-height: 1;
+            height: 100%;
+        }
+        #aiPanel.collapsed #aiHeader .ai-title-text {
+            align-items: center;
+            line-height: 1;
+            height: 100%;
+        }
+        #aiPanel.collapsed #aiHeader .ai-title-main {
+            font-size: 12px;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            height: 100%;
+        }
+        #aiPanel.collapsed #aiHeader .ai-icon-badge {
+            width: 24px;
+            height: 24px;
+            margin: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        #aiPanel.collapsed #aiHeader .ai-icon-badge i {
+            font-size: 11px;
+            line-height: 1;
+            display: block;
+        }
+        #aiPanel.collapsed #aiHeader .ai-header-actions {
+            align-items: center;
+            height: 100%;
+            gap: 6px;
+        }
+        #aiPanel.collapsed #aiHeader #aiModelSelector {
+            height: 22px;
+            padding: 0 18px 0 6px;
+            font-size: 9px;
+            line-height: 22px;
+            background-position: right 5px center;
+        }
+        #aiPanel.collapsed #aiHeader #aiClearBtn {
+            width: 22px;
+            height: 22px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #aiPanel.collapsed #aiHeader #aiClearBtn i {
+            font-size: 10px;
+            line-height: 1;
+        }
+        /* Hide the accent bar in collapsed state to avoid it shifting padding */
+        #aiPanel.collapsed .ai-header-accent {
+            display: none;
+        }
+        #aiPanel.collapsed #aiBody,
+        #aiPanel.collapsed #aiInputRow,
+        #aiPanel.collapsed #aiQuickActions {
+            display: none !important;
+            height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: 0 !important;
+        }
+'''
+
+m = anchor.search(html)
+if m:
+    # Insert after the #aiPanel.collapsed { ... } block
+    insert_pos = m.end()
+    html = html[:insert_pos] + new_rules + html[insert_pos:]
+    changes += 1
+    print("  OK — new centering rules inserted")
 else:
-    print("FAIL — PUT handler pattern not matched")
-    # Try regex
-    pattern = re.compile(
-        r"@app\.route\('/workflows/<name>',\s*methods=\['GET','PUT','DELETE'\]\)[\s\S]*?return jsonify\(\{\"status\":\"deleted\"\}\)",
-        re.DOTALL
-    )
-    if pattern.search(code):
-        code = pattern.sub(new, code, count=1)
-        print("OK — PUT handler replaced (regex)")
-
-with open(SERVER, 'w', encoding='utf-8') as f:
-    f.write(code)
-
-try:
-    compile(open(SERVER, 'r', encoding='utf-8').read(), SERVER, 'exec')
-    print("Compiles OK")
-except SyntaxError as e:
-    print("FAIL line {}: {}".format(e.lineno, e.msg))
-    shutil.copy(SERVER + '.backup_merge', SERVER)
+    print("  FAIL — could not locate #aiPanel.collapsed block")
     sys.exit(1)
 
-print("\nNext: git add server.py && git commit -m 'Merge preserve mode/schedule on PUT' && git push")
+with open(HTML, 'w', encoding='utf-8') as f:
+    f.write(html)
+
+# ═══════════════════════════════════════════════════════════════
+# Verify
+# ═══════════════════════════════════════════════════════════════
+print("\n[3] Verifying...")
+
+final = open(HTML, 'r', encoding='utf-8').read()
+
+checks = [
+    ("44px collapsed height",         'height: 44px;\n            min-height: 44px;\n            max-height: 44px;' in final),
+    ("header align-items center",     '#aiPanel.collapsed #aiHeader {' in final and 'align-items: center' in final),
+    ("header line-height 1",          'line-height: 1;' in final),
+    ("title height 100%",             '.ai-title-main {\n            font-size: 12px;\n            line-height: 1;\n            display: flex;\n            align-items: center;\n            height: 100%;' in final),
+    ("icon badge 24x24",              '#aiPanel.collapsed #aiHeader .ai-icon-badge {\n            width: 24px;' in final),
+    ("selector height 22px",          '#aiPanel.collapsed #aiHeader #aiModelSelector {\n            height: 22px;' in final),
+    ("accent bar hidden",             '#aiPanel.collapsed .ai-header-accent {\n            display: none;' in final),
+    ("body hidden with important",    'display: none !important;' in final),
+]
+
+all_ok = True
+for name, ok in checks:
+    print("  [{}] {}".format("OK  " if ok else "FAIL", name))
+    if not ok:
+        all_ok = False
+
+print()
+if all_ok:
+    print("=" * 55)
+    print("PATCH COMPLETE")
+    print("=" * 55)
+    print("\nNext:")
+    print("  git add public/index.html")
+    print("  git commit -m 'AI panel: vertically center collapsed header content'")
+    print("  git push origin main")
+else:
+    print("Review FAIL lines above")
+    print("Backup: index.html.backup_ai_nudge")
