@@ -1491,8 +1491,36 @@ def ai_chat():
         "TEST: ANSWER only? call research() directly. DELIVERY needed? build workflow.\n\n"
 
         "### BUILD WORKFLOWS\n"
-        "Format: list of {type, data} nodes\n"
-        "Nodes: trigger/webhook, action/http, logic/code, tool/integration, output/console\n\n"
+        "Format: a JSON array of nodes. Each node is {type: string, data: OBJECT}.\n"
+        "`data` is ALWAYS an object with named keys — NEVER a raw string.\n\n"
+
+        "Node schemas (exact key names):\n"
+        "  trigger/webhook    data: {}                             (no keys)\n"
+        "  action/http        data: {url: string, method: string, body?: string, headers?: object}\n"
+        "  logic/code         data: {code: string, lang: \"javascript\"}\n"
+        "                     ← data.code contains the JS source as a STRING,\n"
+        "                       data.lang is the language, usually \"javascript\".\n"
+        "  tool/integration   data: {service: string, message: string}\n"
+        "                     ← service = one of: gmail-smtp, discord, slack, telegram,\n"
+        "                       notion, google-sheets, twilio-sms, webhook, http-custom.\n"
+        "                       message = \"\" (empty — auto-inherits previous output).\n"
+        "  output/console     data: {}                             (no keys)\n\n"
+
+        "WRONG examples (do NOT emit):\n"
+        "  {\"type\": \"logic/code\", \"data\": \"...JS string...\"}             ← data must be object, not string\n"
+        "  {\"type\": \"tool/integration\", \"data\": {\"integration\": \"email\", ...}}  ← must use `service`, not `integration`\n"
+        "  {\"type\": \"tool/integration\", \"data\": {\"to\": \"...\", \"subject\": \"...\"}}    ← only `service` and `message` allowed\n\n"
+
+        "CORRECT example for a Code node:\n"
+        "  {\"type\": \"logic/code\",\n"
+        "   \"data\": {\n"
+        "     \"lang\": \"javascript\",\n"
+        "     \"code\": \"if (!data || !data.jobs) { output('[ERROR] no jobs'); } else { output(data.jobs.slice(0,3).map(function(j){return j.title;}).join('\\\\n')); }\"\n"
+        "   }}\n\n"
+
+        "CORRECT example for an email tool node (gmail-smtp):\n"
+        "  {\"type\": \"tool/integration\",\n"
+        "   \"data\": {\"service\": \"gmail-smtp\", \"message\": \"\"}}\n\n"
 
         "For research + delivery:\n"
         "  url: '/api/remote_chat'\n"
