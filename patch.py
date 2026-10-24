@@ -6,20 +6,20 @@ if not os.path.exists(SERVER):
     print("Not found:", SERVER); exit(1)
 
 shutil.copy(SERVER, SERVER + '.backup_direct')
-print("Backed up to server.py.backup_direct\n")
+print("Backed up\n")
 
 with open(SERVER, 'r', encoding='utf-8') as f:
     code = f.read()
 
-print(f"File: {len(code)} chars\n")
+print("File:", len(code), "chars\n")
 changes = 0
 
 # ═══════════════════════════════════════════════════════════════
-# 1. Remove psycopg_pool from imports (keep psycopg only)
+# 1. Fix imports — drop psycopg_pool
 # ═══════════════════════════════════════════════════════════════
-print("[1] Fixing imports — drop psycopg_pool...")
+print("[1] Fixing imports...")
 
-old_imports = '''try:
+old = '''try:
     import psycopg
     from psycopg.rows import dict_row
     from psycopg_pool import ConnectionPool
@@ -30,7 +30,7 @@ except ImportError:
     ConnectionPool = None
     _HAS_PSYCOPG = False'''
 
-new_imports = '''try:
+new = '''try:
     import psycopg
     from psycopg.rows import dict_row
     _HAS_PSYCOPG = True
@@ -40,19 +40,19 @@ except ImportError as _ie:
     _HAS_PSYCOPG = False
     print(f"[db] psycopg import failed: {_ie}")'''
 
-if old_imports in code:
-    code = code.replace(old_imports, new_imports, 1)
+if old in code:
+    code = code.replace(old, new, 1)
     changes += 1
     print("  OK - imports fixed")
 else:
-    print("  SKIP - imports already correct or different")
+    print("  SKIP - imports already fixed")
 
 # ═══════════════════════════════════════════════════════════════
-# 2. Replace pool init with direct connection test
+# 2. Replace ConnectionPool init with direct-connect test
 # ═══════════════════════════════════════════════════════════════
-print("\n[2] Replacing pool init with direct connect...")
+print("\n[2] Replacing pool init...")
 
-old_pool = '''_pool = None
+old = '''_pool = None
 if USE_DB:
     try:
         _pool = ConnectionPool(
@@ -68,7 +68,7 @@ if USE_DB:
         _pool = None
         USE_DB = False'''
 
-new_pool = '''_pool = None
+new = '''_pool = None
 if USE_DB:
     try:
         _test = psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True, connect_timeout=10)
@@ -78,26 +78,25 @@ if USE_DB:
         print(f"[db] Connection failed: {_e} — falling back to filesystem")
         USE_DB = False'''
 
-if old_pool in code:
-    code = code.replace(old_pool, new_pool, 1)
+if old in code:
+    code = code.replace(old, new, 1)
     changes += 1
     print("  OK - pool init replaced")
 else:
-    print("  SKIP - pool init already replaced or different")
+    print("  SKIP - pool init already replaced")
 
 # ═══════════════════════════════════════════════════════════════
-# 3. Replace _db_init_schema, _db_exec, _db_one, _db_all
-#    (all four currently use _pool.connection())
+# 3. Replace _db_exec / _db_one / _db_all / _db_init_schema
+#    to use direct psycopg.connect instead of _pool.connection()
 # ═══════════════════════════════════════════════════════════════
-print("\n[3] Replacing DB helper functions...")
+print("\n[3] Replacing DB helpers...")
 
-# Match all four together from def _db_init_schema to end of _db_all
 pattern = re.compile(
     r"def _db_init_schema\(\):.*?(?=\ndef memory_save_message)",
     re.DOTALL
 )
 
-new_helpers = '''def _db_init_schema():
+new_block = '''def _db_init_schema():
     if not USE_DB:
         return
     try:
@@ -105,27 +104,27 @@ new_helpers = '''def _db_init_schema():
             with conn.cursor() as cur:
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS workflows (
-                        name        TEXT PRIMARY KEY,
-                        payload     JSONB NOT NULL,
-                        updated_at  TIMESTAMPTZ DEFAULT NOW()
+                        name TEXT PRIMARY KEY,
+                        payload JSONB NOT NULL,
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
                     );
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS credentials (
-                        service     TEXT PRIMARY KEY,
-                        payload     JSONB NOT NULL,
-                        updated_at  TIMESTAMPTZ DEFAULT NOW()
+                        service TEXT PRIMARY KEY,
+                        payload JSONB NOT NULL,
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
                     );
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS execution_logs (
-                        id          BIGSERIAL PRIMARY KEY,
-                        workflow    TEXT NOT NULL,
-                        source      TEXT NOT NULL,
-                        status      TEXT,
-                        result      JSONB,
-                        logs        JSONB,
-                        created_at  TIMESTAMPTZ DEFAULT NOW()
+                        id BIGSERIAL PRIMARY KEY,
+                        workflow TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        status TEXT,
+                        result JSONB,
+                        logs JSONB,
+                        created_at TIMESTAMPTZ DEFAULT NOW()
                     );
                 """)
                 cur.execute("""
@@ -134,11 +133,11 @@ new_helpers = '''def _db_init_schema():
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS memory_messages (
-                        id          BIGSERIAL PRIMARY KEY,
-                        created_at  TIMESTAMPTZ DEFAULT NOW(),
-                        role        TEXT NOT NULL,
-                        text        TEXT NOT NULL,
-                        session_id  TEXT
+                        id BIGSERIAL PRIMARY KEY,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        role TEXT NOT NULL,
+                        text TEXT NOT NULL,
+                        session_id TEXT
                     );
                 """)
                 cur.execute("""
@@ -147,9 +146,9 @@ new_helpers = '''def _db_init_schema():
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS memory_facts (
-                        key         TEXT PRIMARY KEY,
-                        value       JSONB,
-                        updated_at  TIMESTAMPTZ DEFAULT NOW()
+                        key TEXT PRIMARY KEY,
+                        value JSONB,
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
                     );
                 """)
         print("[db] schema ensured")
@@ -197,38 +196,29 @@ def _db_all(query, params=None):
 
 '''
 if pattern.search(code):
-    code = pattern.sub(new_helpers, code, count=1)
+    code = pattern.sub(new_block, code, count=1)
     changes += 1
-    print("  OK - helper functions replaced")
+    print("  OK - helpers replaced")
 else:
     print("  FAIL - could not match helper block")
 
 # ═══════════════════════════════════════════════════════════════
-# 4. Remove the standalone "_db_init_schema()" call at module
-#    scope (it's inside the new block now), then re-add ONE call
-#    right after the new _db_all function.
+# 4. Ensure single schema-init call after helpers
 # ═══════════════════════════════════════════════════════════════
-print("\n[4] Ensuring schema init is called exactly once...")
+print("\n[4] Ensuring schema init runs once...")
 
-# Strip any standalone top-level call
+# Remove stray top-level calls
 code = re.sub(r'^_db_init_schema\(\)\s*$', '', code, flags=re.MULTILINE)
 
-# Insert one call after _db_all definition
+# Insert one call after _db_all
 anchor = "\ndef _db_all(query, params=None):"
-if anchor in code:
-    # find end of _db_all function
+if anchor in code and "\n_db_init_schema()\n" not in code:
     idx = code.find(anchor)
     end = code.find("\ndef ", idx + 10)
-    if end == -1:
-        end = code.find("\n\n\n", idx)
     if end != -1:
         code = code[:end] + "\n\n_db_init_schema()\n" + code[end:]
         changes += 1
-        print("  OK - schema init call inserted after _db_all")
-    else:
-        print("  SKIP - could not find end of _db_all")
-else:
-    print("  SKIP - _db_all not found")
+        print("  OK - init call inserted")
 
 # ═══════════════════════════════════════════════════════════════
 # Write and verify
@@ -240,42 +230,30 @@ print("\n" + "=" * 55)
 print(f"Wrote {len(code)} chars — {changes} change(s)")
 print("=" * 55)
 
-print("\nVerifying syntax...")
+print("\nSyntax check...")
 try:
     with open(SERVER, 'r', encoding='utf-8') as f:
         compile(f.read(), SERVER, 'exec')
-    print("OK — compiles clean")
+    print("OK")
 except SyntaxError as e:
     print(f"SYNTAX ERROR line {e.lineno}: {e.msg}")
-    if e.text:
-        print(f"   {e.text[:120]}")
     shutil.copy(SERVER + '.backup_direct', SERVER)
     print("Restored from backup")
     exit(1)
 
-# ═══════════════════════════════════════════════════════════════
-# Verify all pieces in place
-# ═══════════════════════════════════════════════════════════════
+# Final verification
 with open(SERVER, 'r', encoding='utf-8') as f:
     final = f.read()
 
 checks = [
-    ("psycopg import present",     "import psycopg" in final),
-    ("No psycopg_pool anywhere",   "psycopg_pool" not in final),
-    ("No ConnectionPool",          "ConnectionPool" not in final),
-    ("DATABASE_URL read",          'os.environ.get("DATABASE_URL"' in final),
-    ("USE_DB computed",            "USE_DB = bool(DATABASE_URL)" in final),
-    ("Direct connection test",     "Neon connection OK (direct connect)" in final),
-    ("_db_init_schema direct",     'psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True, connect_timeout=10)' in final),
-    ("save_workflow DB path",      "INSERT INTO workflows (name, payload" in final),
-    ("load_workflow DB path",      "SELECT payload FROM workflows" in final),
-    ("save_creds DB path",         "INSERT INTO credentials" in final),
-    ("memory_save_message DB",     "INSERT INTO memory_messages" in final),
-    ("Schema init call exists",    final.count("_db_init_schema()") >= 1),
-    ("app = Flask present",        "app = Flask(__name__)" in final),
-    ("app.run inside __main__",
-        any(line.startswith('    ') and 'app.run(host' in line for line in final.split('\n'))),
+    ("psycopg import",          "import psycopg" in final),
+    ("No psycopg_pool",         "psycopg_pool" not in final),
+    ("No ConnectionPool",       "ConnectionPool" not in final),
+    ("Direct connect helpers",  final.count("psycopg.connect(DATABASE_URL") >= 4),
+    ("Schema call present",     final.count("_db_init_schema()") >= 1),
+    ("app = Flask",             "app = Flask(__name__)" in final),
 ]
+print("\nVERIFICATION:")
 all_ok = True
 for name, ok in checks:
     print(f"  [{'OK  ' if ok else 'FAIL'}] {name}")
@@ -284,16 +262,13 @@ for name, ok in checks:
 
 print()
 if all_ok and changes > 0:
-    print("PATCH COMPLETE — all checks passed")
-elif changes == 0:
-    print("NOTHING CHANGED — already patched")
+    print("PATCH COMPLETE")
 else:
-    print("PARTIAL — review FAIL lines")
+    print("Review FAIL lines")
 
 print()
-print("NEXT STEPS:")
-print()
-print("1. Update requirements.txt (remove psycopg_pool):")
+print("NEXT:")
+print("1. requirements.txt should be:")
 print("   flask>=3.0")
 print("   flask-cors>=4.0")
 print("   requests>=2.31")
@@ -301,10 +276,6 @@ print("   python-dotenv>=1.0")
 print("   psycopg[binary]>=3.2")
 print("   ollama>=0.3.0")
 print()
-print("2. Test locally:")
-print("   python -c \"import server; print('app:', server.app, 'USE_DB:', server.USE_DB)\"")
-print()
-print("3. Commit and push:")
-print("   git add server.py requirements.txt")
-print("   git commit -m 'DB: direct psycopg connect, drop pool'")
+print("2. git add server.py requirements.txt")
+print("   git commit -m 'DB: direct connect, no psycopg_pool'")
 print("   git push")

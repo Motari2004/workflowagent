@@ -217,27 +217,27 @@ def _db_init_schema():
             with conn.cursor() as cur:
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS workflows (
-                        name        TEXT PRIMARY KEY,
-                        payload     JSONB NOT NULL,
-                        updated_at  TIMESTAMPTZ DEFAULT NOW()
+                        name TEXT PRIMARY KEY,
+                        payload JSONB NOT NULL,
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
                     );
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS credentials (
-                        service     TEXT PRIMARY KEY,
-                        payload     JSONB NOT NULL,
-                        updated_at  TIMESTAMPTZ DEFAULT NOW()
+                        service TEXT PRIMARY KEY,
+                        payload JSONB NOT NULL,
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
                     );
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS execution_logs (
-                        id          BIGSERIAL PRIMARY KEY,
-                        workflow    TEXT NOT NULL,
-                        source      TEXT NOT NULL,
-                        status      TEXT,
-                        result      JSONB,
-                        logs        JSONB,
-                        created_at  TIMESTAMPTZ DEFAULT NOW()
+                        id BIGSERIAL PRIMARY KEY,
+                        workflow TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        status TEXT,
+                        result JSONB,
+                        logs JSONB,
+                        created_at TIMESTAMPTZ DEFAULT NOW()
                     );
                 """)
                 cur.execute("""
@@ -246,11 +246,11 @@ def _db_init_schema():
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS memory_messages (
-                        id          BIGSERIAL PRIMARY KEY,
-                        created_at  TIMESTAMPTZ DEFAULT NOW(),
-                        role        TEXT NOT NULL,
-                        text        TEXT NOT NULL,
-                        session_id  TEXT
+                        id BIGSERIAL PRIMARY KEY,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        role TEXT NOT NULL,
+                        text TEXT NOT NULL,
+                        session_id TEXT
                     );
                 """)
                 cur.execute("""
@@ -259,9 +259,9 @@ def _db_init_schema():
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS memory_facts (
-                        key         TEXT PRIMARY KEY,
-                        value       JSONB,
-                        updated_at  TIMESTAMPTZ DEFAULT NOW()
+                        key TEXT PRIMARY KEY,
+                        value JSONB,
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
                     );
                 """)
         print("[db] schema ensured")
