@@ -2715,7 +2715,8 @@ async function showWebhookUrl() {
     const name = document.getElementById('workflowName').value.trim();
     if (!name) { toast('Enter workflow name','error'); return; }
     if (!await saveCurrentWorkflow()) return;
-    const url = `/webhook/${encodeURIComponent(name)}`;
+    const origin = window.location.origin;
+    const url = `${origin}/webhook/${encodeURIComponent(name)}`;
     document.getElementById('log').innerHTML = `
         <div class="log-entry success">
             <div class="font-bold mb-2">Webhook URL for "${name}":</div>
