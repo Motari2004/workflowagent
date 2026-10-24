@@ -1052,6 +1052,21 @@ const fs = require('fs');
 const _input = fs.readFileSync(process.argv[2], 'utf-8');
 let _output = _input;
 function output(val) { _output = typeof val === 'string' ? val : JSON.stringify(val); }
+
+// Auto-parse `input` into `data` so JS Code nodes can use either style.
+let _jsonText = _input;
+if (typeof _jsonText === 'string' && _jsonText.startsWith('HTTP ')) {
+    const _ci = _jsonText.indexOf(':');
+    if (_ci > 0) _jsonText = _jsonText.slice(_ci + 1).trim();
+}
+let data = null;
+try {
+    data = JSON.parse(_jsonText);
+    if (data && typeof data.response === 'string') {
+        try { data = JSON.parse(data.response); } catch (_) {}
+    }
+} catch (_) { data = null; }
+
 const input = _input;
 (async () => {
     try {

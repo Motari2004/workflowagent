@@ -5,74 +5,106 @@ SERVER = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\server.py'
 if not os.path.exists(SERVER):
     print("Not found"); exit(1)
 
-shutil.copy(SERVER, SERVER + '.backup_schema')
+shutil.copy(SERVER, SERVER + '.backup_jsdata')
 print("Backed up\n")
 
 with open(SERVER, 'r', encoding='utf-8') as f:
     code = f.read()
 
-old_schema = '''        "### BUILD WORKFLOWS\\n"
-        "Format: list of {type, data} nodes\\n"
-        "Nodes: trigger/webhook, action/http, logic/code, tool/integration, output/console\\n\\n"'''
+# The EXACT old template block as it appears in your server.py
+old_template = '''    template = r"""
+const fs = require('fs');
+const _input = fs.readFileSync(process.argv[2], 'utf-8');
+let _output = _input;
+function output(val) { _output = typeof val === 'string' ? val : JSON.stringify(val); }
+const input = _input;
+(async () => {
+    try {
+""" + user_code + r"""
+        process.stdout.write(String(_output));
+    } catch (err) {
+        process.stderr.write("ERROR: " + (err && err.stack ? err.stack : String(err)));
+        process.exit(1);
+    }
+})();
+"""'''
 
-new_schema = '''        "### BUILD WORKFLOWS\\n"
-        "Format: a JSON array of nodes. Each node is {type: string, data: OBJECT}.\\n"
-        "`data` is ALWAYS an object with named keys — NEVER a raw string.\\n\\n"
+new_template = '''    template = r"""
+const fs = require('fs');
+const _input = fs.readFileSync(process.argv[2], 'utf-8');
+let _output = _input;
+function output(val) { _output = typeof val === 'string' ? val : JSON.stringify(val); }
 
-        "Node schemas (exact key names):\\n"
-        "  trigger/webhook    data: {}                             (no keys)\\n"
-        "  action/http        data: {url: string, method: string, body?: string, headers?: object}\\n"
-        "  logic/code         data: {code: string, lang: \\\"javascript\\\"}\\n"
-        "                     ← data.code contains the JS source as a STRING,\\n"
-        "                       data.lang is the language, usually \\\"javascript\\\".\\n"
-        "  tool/integration   data: {service: string, message: string}\\n"
-        "                     ← service = one of: gmail-smtp, discord, slack, telegram,\\n"
-        "                       notion, google-sheets, twilio-sms, webhook, http-custom.\\n"
-        "                       message = \\\"\\\" (empty — auto-inherits previous output).\\n"
-        "  output/console     data: {}                             (no keys)\\n\\n"
+// Auto-parse `input` into `data` so JS Code nodes can use either style.
+let _jsonText = _input;
+if (typeof _jsonText === 'string' && _jsonText.startsWith('HTTP ')) {
+    const _ci = _jsonText.indexOf(':');
+    if (_ci > 0) _jsonText = _jsonText.slice(_ci + 1).trim();
+}
+let data = null;
+try {
+    data = JSON.parse(_jsonText);
+    if (data && typeof data.response === 'string') {
+        try { data = JSON.parse(data.response); } catch (_) {}
+    }
+} catch (_) { data = null; }
 
-        "WRONG examples (do NOT emit):\\n"
-        "  {\\\"type\\\": \\\"logic/code\\\", \\\"data\\\": \\\"...JS string...\\\"}             ← data must be object, not string\\n"
-        "  {\\\"type\\\": \\\"tool/integration\\\", \\\"data\\\": {\\\"integration\\\": \\\"email\\\", ...}}  ← must use `service`, not `integration`\\n"
-        "  {\\\"type\\\": \\\"tool/integration\\\", \\\"data\\\": {\\\"to\\\": \\\"...\\\", \\\"subject\\\": \\\"...\\\"}}    ← only `service` and `message` allowed\\n\\n"
+const input = _input;
+(async () => {
+    try {
+""" + user_code + r"""
+        process.stdout.write(String(_output));
+    } catch (err) {
+        process.stderr.write("ERROR: " + (err && err.stack ? err.stack : String(err)));
+        process.exit(1);
+    }
+})();
+"""'''
 
-        "CORRECT example for a Code node:\\n"
-        "  {\\\"type\\\": \\\"logic/code\\\",\\n"
-        "   \\\"data\\\": {\\n"
-        "     \\\"lang\\\": \\\"javascript\\\",\\n"
-        "     \\\"code\\\": \\\"if (!data || !data.jobs) { output('[ERROR] no jobs'); } else { output(data.jobs.slice(0,3).map(function(j){return j.title;}).join('\\\\\\\\n')); }\\\"\\n"
-        "   }}\\n\\n"
-
-        "CORRECT example for an email tool node (gmail-smtp):\\n"
-        "  {\\\"type\\\": \\\"tool/integration\\\",\\n"
-        "   \\\"data\\\": {\\\"service\\\": \\\"gmail-smtp\\\", \\\"message\\\": \\\"\\\"}}\\n\\n"'''
-
-if old_schema in code:
-    code = code.replace(old_schema, new_schema, 1)
-    print("[1] Node schema documentation expanded")
+if old_template in code:
+    code = code.replace(old_template, new_template, 1)
+    print("[1] Replaced template — `data` is now auto-parsed")
+elif 'let data = null;' in code and 'JSON.parse(_jsonText)' in code:
+    print("[1] Already patched — no change")
 else:
-    print("[1] FAIL — could not match BUILD WORKFLOWS section")
-    print("    Search server.py for: ### BUILD WORKFLOWS")
-    exit(1)
+    print("[1] FAIL — could not find exact template block")
+    print("    The block may have been modified. Trying regex fallback...")
+
+    import re
+    pattern = re.compile(
+        r"    template = r\"\"\"\s*\n"
+        r"const fs = require\('fs'\);.*?"
+        r"const input = _input;",
+        re.DOTALL
+    )
+    match = pattern.search(code)
+    if match:
+        code = code[:match.start()] + new_template.split('""" + user_code')[0] + '"""' + code[match.end() - len('const input = _input;'):]
+        print("[1] Regex fallback applied")
+    else:
+        print("[1] Regex also failed — aborting")
+        print("    Search server.py for: template = r\"\"\"")
+        exit(1)
 
 with open(SERVER, 'w', encoding='utf-8') as f:
     f.write(code)
 
 try:
     compile(open(SERVER, 'r', encoding='utf-8').read(), SERVER, 'exec')
-    print("Compiles OK")
+    print("\nCompiles OK")
 except SyntaxError as e:
-    shutil.copy(SERVER + '.backup_schema', SERVER)
+    shutil.copy(SERVER + '.backup_jsdata', SERVER)
     print(f"Syntax error line {e.lineno}: {e.msg} — restored")
     exit(1)
 
+# Verify
 final = open(SERVER, 'r', encoding='utf-8').read()
 checks = [
-    ("logic/code schema documented",   'logic/code         data: {code: string' in final),
-    ("tool/integration schema",        'tool/integration   data: {service: string' in final),
-    ("Wrong example: string data",     'data\\\": \\\"...JS string...' in final),
-    ("Wrong example: integration key", 'must use `service`, not `integration`' in final),
-    ("Correct code node example",      '\\\"lang\\\": \\\"javascript\\\"' in final),
+    ("data auto-parsed",       "let data = null;" in final),
+    ("HTTP prefix handling",   "_jsonText.startsWith('HTTP ')" in final),
+    ("response re-parsed",     "JSON.parse(data.response)" in final),
+    ("input still available",  "const input = _input;" in final),
+    ("output() function",      "function output(val)" in final),
 ]
 print("\nVERIFICATION:")
 all_ok = True
@@ -83,8 +115,9 @@ for name, ok in checks:
 
 print()
 if all_ok:
-    print("PROMPT SCHEMA PATCH COMPLETE")
+    print("PATCH COMPLETE")
     print()
-    print("Next: git add server.py")
-    print("      git commit -m 'Document exact node schema for AI'")
-    print("      git push origin main")
+    print("Next:")
+    print("  git add server.py")
+    print("  git commit -m 'Auto-parse data in JS wrapper'")
+    print("  git push origin main")
