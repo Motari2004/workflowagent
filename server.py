@@ -1093,6 +1093,11 @@ def tool_zernio(creds, msg, extra):
         )
 
     # Media URLs - required for Instagram, optional elsewhere
+    print("[zernio] === ENTRY POINT ===")
+    print("[zernio] extra type: " + str(type(extra)))
+    print("[zernio] extra: " + repr(extra)[:500])
+    print("[zernio] extra.media_urls: " + repr((extra or {}).get("media_urls")))
+    
     media_urls = (extra or {}).get("media_urls") or []
     if isinstance(media_urls, str):
         media_urls = [media_urls]
@@ -1121,6 +1126,12 @@ def tool_zernio(creds, msg, extra):
         payload["media_urls"] = media_urls
         payload["media"] = [{"url": u, "type": "image"} for u in media_urls]
 
+    print("[zernio] ===== FULL PAYLOAD =====")
+    print("[zernio] keys: " + str(list(payload.keys())))
+    for k, v in payload.items():
+        print("[zernio]   " + k + " = " + repr(v)[:300])
+    print("[zernio] =========================")
+
     try:
         r = requests.post(
             "https://zernio.com/api/v1/posts",
@@ -1131,6 +1142,7 @@ def tool_zernio(creds, msg, extra):
             json=payload,
             timeout=20,
         )
+        print("[zernio] RESPONSE " + str(r.status_code) + ": " + r.text[:500])
     except requests.exceptions.Timeout:
         return "[ERROR] Zernio: timeout (20s)"
     except requests.exceptions.RequestException as e:
