@@ -964,6 +964,126 @@ def _gemini_call_with_tools(api_key, system, contents, model_name, max_rounds=5)
 
 
 
+def tool_buffer(creds, msg, extra):
+    """Post to Buffer via GraphQL API. Requires personal API key from Buffer Settings -> API."""
+    token = creds.get('api_key')
+    channel_id = creds.get('channel_id')  # optional; if omitted, posts to first channel
+
+    if not token:
+        return "[ERROR] Buffer: api_key not configured (Settings -> API in Buffer)"
+    if not (msg or '').strip():
+        return "[ERROR] Buffer: no content to post"
+
+    text = msg.strip()
+    if len(text) > 280:
+        text = text[:277] + '...'
+
+    query = """
+    mutation CreatePost($input: CreatePostInput!) {
+      createPost(input: $input) {
+        ... on Post {
+          id
+          status
+          channel { id name service }
+        }
+        ... on MutationError {
+          message
+        }
+      }
+    }
+    """
+
+    variables = {
+        "input": {
+            "text": text,
+            "saveToDraft": True,   # safest: creates a draft, user publishes from Buffer
+        }
+    }
+    if channel_id:
+        variables["input"]["channelId"] = channel_id
+
+    try:
+        r = requests.post(
+            'https://api.buffer.com',
+            headers={
+                'Authorization': f'Bearer {token}',
+                'Content-Type': 'application/json',
+            },
+            json={"query": query, "variables": variables},
+            timeout=20,
+        )
+    except requests.exceptions.Timeout:
+        return "[ERROR] Buffer: timeout (20s)"
+    except requests.exceptions.RequestException as e:
+        return f"[ERROR] Buffer: network: {e}"
+
+    if r.status_code != 200:
+        return f"[ERROR] Buffer {r.status_code}: {r.text[:300]}"
+
+    try:
+        data = r.json()
+    except Exception:
+        return f"[ERROR] Buffer: non-JSON response: {r.text[:200]}"
+
+    if 'errors' in data:
+        return f"[ERROR] Buffer GraphQL: {str(data['errors'])[:300]}"
+
+    post = (data.get('data') or {}).get('createPost') or {}
+    if 'message' in post:
+        return f"[ERROR] Buffer: {post['message']}"
+    post_id = post.get('id', '?')
+    status = post.get('status', 'draft')
+    return f"Buffer 200: {status} (id={post_id})"
+
+
+def tool_zernio(creds, msg, extra):
+    """Post to Zernio. Requires api_key (sk_...) and account_id from GET /v1/accounts."""
+    token = creds.get('api_key')
+    account_id = creds.get('account_id')
+
+    if not token:
+        return "[ERROR] Zernio: api_key not configured (starts with sk_)"
+    if not account_id:
+        return "[ERROR] Zernio: account_id not configured (get from GET /v1/accounts)"
+    if not (msg or '').strip():
+        return "[ERROR] Zernio: no content to post"
+
+    text = msg.strip()
+
+    try:
+        r = requests.post(
+            'https://zernio.com/api/v1/posts',
+            headers={
+                'Authorization': f'Bearer {token}',
+                'Content-Type': 'application/json',
+            },
+            json={
+                'content': text,
+                'publishNow': True,
+                'platforms': [{'accountId': account_id}],
+            },
+            timeout=20,
+        )
+    except requests.exceptions.Timeout:
+        return "[ERROR] Zernio: timeout (20s)"
+    except requests.exceptions.RequestException as e:
+        return f"[ERROR] Zernio: network: {e}"
+
+    if r.status_code in (200, 201):
+        try:
+            data = r.json()
+            post_id = data.get('_id') or data.get('id', '?')
+            return f"Zernio {r.status_code}: posted (id={post_id})"
+        except Exception:
+            return f"Zernio {r.status_code}: posted"
+
+    if r.status_code == 401:
+        return "[ERROR] Zernio: 401 Unauthorized — check API key"
+    if r.status_code == 409:
+        return "[ERROR] Zernio: 409 duplicate content (same content posted within 24h)"
+    return f"[ERROR] Zernio {r.status_code}: {r.text[:300]}"
+
+
 TOOL_HANDLERS = {
     'discord':         tool_discord,
     'slack':           tool_slack,
@@ -985,6 +1105,8 @@ TOOL_HANDLERS = {
     'rss':             tool_rss,
     'webhook':         tool_webhook,
     'http-custom':     tool_http_custom,
+    'buffer':          tool_buffer,
+    'zernio':          tool_zernio,
     'mqtt':            tool_mqtt_publish,
     # The 20th: 'telegram' counts twice in the "messaging" family; adding one more
     'pushover':        lambda c,m,e: _pushover(c,m),

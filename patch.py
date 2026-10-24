@@ -1,98 +1,183 @@
-import os, shutil, re
+import os, shutil, sys
 
-SERVER = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\server.py'
+HTML = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\public\index.html'
 
-if not os.path.exists(SERVER):
-    print("Not found"); exit(1)
+if not os.path.exists(HTML):
+    print("ERROR: index.html not found")
+    sys.exit(1)
 
-shutil.copy(SERVER, SERVER + '.backup_apis_final')
-print("Backed up\n")
+backup = HTML + '.backup_biggericons'
+shutil.copy(HTML, backup)
+print(f"Backed up to {backup}\n")
 
-with open(SERVER, 'r', encoding='utf-8') as f:
-    code = f.read()
+with open(HTML, 'r', encoding='utf-8') as f:
+    original = f.read()
 
-new_block = '''        "### KNOWN-WORKING APIs (use these; do NOT invent others)\\n"
-        "  Bitcoin price:  https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd\\n"
-        "                  returns {bitcoin:{usd:97500}}\\n"
-        "                  use: data.bitcoin.usd\\n"
-        "                  THIS IS THE ONLY reliable Bitcoin API from Vercel.\\n"
-        "  Crypto prices:  https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd\\n"
-        "                  returns {ethereum:{usd:3400}}\\n"
-        "                  use: data.ethereum.usd\\n"
-        "  Remote jobs:    https://remotive.com/api/remote-jobs\\n"
-        "                  returns {jobs:[...]}\\n"
-        "                  use: data.jobs\\n"
-        "  Weather:        https://wttr.in/CITY?format=j1\\n"
-        "                  use: data.current_condition[0].temp_C\\n"
-        "  GitHub issues:  https://api.github.com/repos/OWNER/REPO/issues?state=open&per_page=5\\n"
-        "                  returns an ARRAY\\n"
-        "                  use: Array.isArray(data) ? data : []\\n"
-        "  RSS example:    https://news.ycombinator.com/rss\\n"
-        "                  returns XML - data will be NULL\\n"
-        "                  use: input (raw string) with RegExp\\n"
-        "  News:           https://newsapi.org/v2/top-headlines?country=us&apiKey=KEY\\n"
-        "                  use: data.articles\\n\\n"
+print(f"File: {len(original)} chars")
+changes = 0
 
-        "DEPRECATED URLs - NEVER emit these:\\n"
-        "  - api.coindesk.com        (DNS dead since 2024)\\n"
-        "  - api.binance.com         (HTTP 451 from Vercel US East)\\n"
-        "  - remotive.io             (use remotive.com)\\n"
-        "  - api.cryptocompare.com   (requires paid key)\\n\\n"
+# ═══════════════════════════════════════════════════════════════
+# 1. Increase .tool-icon container size: 28px -> 36px
+# ═══════════════════════════════════════════════════════════════
+print("\n[1] Increasing .tool-icon container (28px -> 36px)...")
 
-        "If the user asks for Bitcoin price, ALWAYS use CoinGecko:\\n"
-        "  https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd\\n\\n"
+old_css = '''.tool-icon {
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            background: rgba(148, 163, 184, 0.06);
+            border: 1px solid rgba(148, 163, 184, 0.08);
+            flex-shrink: 0;
+            transition: all 0.15s ease;
+        }'''
 
-        "### TOOLS\\n"'''
+new_css = '''.tool-icon {
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            background: rgba(148, 163, 184, 0.06);
+            border: 1px solid rgba(148, 163, 184, 0.08);
+            flex-shrink: 0;
+            transition: all 0.15s ease;
+        }'''
 
-# Match from KNOWN-WORKING APIs through ### TOOLS
-pattern = re.compile(
-    r'\s*"### KNOWN-WORKING APIs[\s\S]*?"### TOOLS\\n"',
-    re.DOTALL
-)
-
-if pattern.search(code):
-    code = pattern.sub(new_block, code, count=1)
-    print("[1] Replaced entire API block with ASCII version")
+if old_css in original:
+    original = original.replace(old_css, new_css, 1)
+    changes += 1
+    print("  OK - .tool-icon 28x28 -> 36x36")
 else:
-    print("[1] FAIL — could not match block")
-    print("    Search server.py for: ### KNOWN-WORKING APIs")
-    exit(1)
+    print("  SKIP - .tool-icon block not matched (may already be modified)")
 
-with open(SERVER, 'w', encoding='utf-8') as f:
-    f.write(code)
+# Also increase the icon font size inside .tool-icon for FA icons
+old_fa = '''.tool-icon i {
+            font-size: 14px;
+            color: var(--tool-color, #94a3b8);
+            opacity: 0.9;
+            transition: opacity 0.15s ease;
+        }'''
 
-try:
-    compile(open(SERVER, 'r', encoding='utf-8').read(), SERVER, 'exec')
-    print("Compiles OK")
-except SyntaxError as e:
-    shutil.copy(SERVER + '.backup_apis_final', SERVER)
-    print(f"Syntax error line {e.lineno}: {e.msg} — restored")
-    exit(1)
+new_fa = '''.tool-icon i {
+            font-size: 18px;
+            color: var(--tool-color, #94a3b8);
+            opacity: 0.9;
+            transition: opacity 0.15s ease;
+        }'''
 
-# Verify no Binance remains in the API section
-final = open(SERVER, 'r', encoding='utf-8').read()
-api_start = final.find('### KNOWN-WORKING APIs')
-api_end = final.find('### TOOLS', api_start)
-api_section = final[api_start:api_end]
+if old_fa in original:
+    original = original.replace(old_fa, new_fa, 1)
+    changes += 1
+    print("  OK - .tool-icon i 14px -> 18px")
+else:
+    print("  SKIP - .tool-icon i block not matched")
+
+# ═══════════════════════════════════════════════════════════════
+# 2. Increase SVG size in credentials panel: 14 -> 20
+# ═══════════════════════════════════════════════════════════════
+print("\n[2] Increasing credentials panel SVG size (14 -> 20)...")
+
+# The credentials list calls: getToolIconHtml(key, 14)
+old_call = '${getToolIconHtml(key, 14)}'
+new_call = '${getToolIconHtml(key, 20)}'
+
+count = original.count(old_call)
+if count > 0:
+    original = original.replace(old_call, new_call)
+    changes += count
+    print(f"  OK - bumped {count} call(s) from 14 to 20")
+else:
+    print("  SKIP - no '${getToolIconHtml(key, 14)}' calls found")
+
+# ═══════════════════════════════════════════════════════════════
+# 3. Increase edit credentials modal header icon: 16 -> 22
+# ═══════════════════════════════════════════════════════════════
+print("\n[3] Increasing edit modal header icon (16 -> 22)...")
+
+old_modal = '${getToolIconHtml(service, 16)}'
+new_modal = '${getToolIconHtml(service, 22)}'
+
+count = original.count(old_modal)
+if count > 0:
+    original = original.replace(old_modal, new_modal)
+    changes += count
+    print(f"  OK - bumped {count} modal call(s) from 16 to 22")
+else:
+    print("  SKIP - no '${getToolIconHtml(service, 16)}' calls found")
+
+# ═══════════════════════════════════════════════════════════════
+# 4. Also bump the tool label size for better proportion
+# ═══════════════════════════════════════════════════════════════
+print("\n[4] Increasing tool label size for balance...")
+
+# In credentials panel, the label is 'text-xs' (12px). Bump to text-sm (14px).
+old_label = '<span class="text-xs font-bold text-slate-200 flex-1">${tool.label}</span>'
+new_label = '<span class="text-sm font-bold text-slate-200 flex-1">${tool.label}</span>'
+
+if old_label in original:
+    original = original.replace(old_label, new_label, 1)
+    changes += 1
+    print("  OK - label text-xs -> text-sm (12px -> 14px)")
+else:
+    print("  SKIP - label pattern not matched")
+
+# ═══════════════════════════════════════════════════════════════
+# Verify
+# ═══════════════════════════════════════════════════════════════
+print("\n[5] Verifying...")
+
+# Size sanity
+size_diff = len(original) - len(backup) if os.path.exists(backup) else 0
+if abs(size_diff) > 5000:
+    print(f"  ERROR: suspicious size change ({size_diff} chars)")
+    print("  Aborting")
+    sys.exit(1)
 
 checks = [
-    ("CoinGecko primary",    'api.coingecko.com/api/v3/simple/price?ids=bitcoin' in api_section),
-    ("Binance deprecated",   'api.binance.com         (HTTP 451' in api_section),
-    ("No '→' arrows",        '→' not in api_section),
-    ("No emoji",             not any(ord(c) > 127 for c in api_section)),
-    ("Bitcoin-only rule",    'ALWAYS use CoinGecko' in api_section),
-    ("### TOOLS preserved",  '### TOOLS' in final),
+    ("tool-icon is 36px",        'width: 36px;\n            height: 36px' in original),
+    ("tool-icon i is 18px",       'font-size: 18px;' in original),
+    ("credentials icon 20px",     '${getToolIconHtml(key, 20)}' in original),
+    ("modal icon 22px",            '${getToolIconHtml(service, 22)}' in original),
+    ("label text-sm",              'text-sm font-bold text-slate-200' in original),
+    ("getToolIconHtml intact",     'function getToolIconHtml' in original),
+    ("custom-gmail-envelope",      'custom-gmail-envelope' in original),
+    ("custom-zernio",              'custom-zernio' in original),
+    ("TOOLS object intact",        'const TOOLS = {' in original),
 ]
-print("\nVERIFICATION:")
+
 all_ok = True
 for name, ok in checks:
     print(f"  [{'OK  ' if ok else 'FAIL'}] {name}")
     if not ok:
         all_ok = False
 
-if all_ok:
-    print("\nPATCH COMPLETE")
-    print("Next:")
-    print("  git add server.py")
-    print("  git commit -m 'Final API prompt: CoinGecko only, Binance deprecated, ASCII'")
-    print("  git push origin main")
+if not all_ok:
+    print("\n  VERIFICATION FAILED — no changes written")
+    print(f"  Backup at {backup}")
+    sys.exit(1)
+
+# ═══════════════════════════════════════════════════════════════
+# Write
+# ═══════════════════════════════════════════════════════════════
+print("\n[6] Writing...")
+
+with open(HTML, 'w', encoding='utf-8') as f:
+    f.write(original)
+
+print(f"  OK - wrote {len(original)} chars")
+print(f"  {changes} change(s) applied")
+
+print("\n" + "=" * 55)
+print("PATCH COMPLETE")
+print("=" * 55)
+print()
+print("Next:")
+print("  git add public/index.html")
+print("  git commit -m 'Increase tool icon sizes: 28px -> 36px containers, larger SVGs'")
+print("  git push origin main")
+print()
+print("Then hard-refresh: Ctrl+Shift+R")

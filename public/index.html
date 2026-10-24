@@ -1293,15 +1293,15 @@ console.log("=== WORKFLOW PRO V5 STARTING ===");
 // 20 TOOL DEFINITIONS
 const TOOLS = {
     'discord':         { label:"Discord",         icon:"fa-discord",         brand:true,  color:"#5865F2", creds:["webhook_url"] },
-    'slack':           { label:"Slack",           icon:"fa-slack",           brand:true,  color:"#4A154B", creds:["webhook_url"] },
+    'slack':           { label:"Slack",           icon:"fa-slack",           brand:true,  color:"#611f69", creds:["webhook_url"] },
     'telegram':        { label:"Telegram",        icon:"fa-telegram",        brand:true,  color:"#26A5E4", creds:["bot_token","chat_id"] },
-    'gmail-smtp':      { label:"Gmail SMTP",     icon:"fa-envelope",       brand:true,  color:"#EA4335", creds:["email","app_password","to"] },
+    'gmail-smtp':      { label:"Gmail SMTP",     icon:"custom-gmail-envelope", brand:false, color:"#EA4335", creds:["email","app_password","to"] },
     'github-issue':    { label:"GitHub Issue",    icon:"fa-github",          brand:true,  color:"#e5e7eb", creds:["token","repo"] },
     'github-comment':  { label:"GitHub Comment",  icon:"fa-github",          brand:true,  color:"#e5e7eb", creds:["token","repo"] },
-    'notion':          { label:"Notion",          icon:"fa-book",            brand:false, color:"#e5e7eb", creds:["token","database_id"] },
+    'notion':          { label:"Notion",          icon:"custom-notion",      brand:false, color:"#ffffff", creds:["token","database_id"] },
     'google-sheets':   { label:"Google Sheets",   icon:"fa-google",          brand:true,  color:"#34A853", creds:["webhook_url"] },
-    'twilio-sms':      { label:"Twilio SMS",      icon:"fa-sms",             brand:false, color:"#F22F46", creds:["sid","token","from","to"] },
-    'openai':          { label:"OpenAI GPT",      icon:"fa-robot",           brand:false, color:"#10A37F", creds:["api_key"] },
+    'twilio-sms':      { label:"Twilio SMS",      icon:"fa-twilio",          brand:true,  color:"#F22F46", creds:["sid","token","from","to"] },
+    'openai':          { label:"OpenAI GPT",      icon:"custom-openai",      brand:false, color:"#10A37F", creds:["api_key"] },
     'gemini':          { label:"Google Gemini",     icon:"fa-google",          brand:true,  color:"#4285F4", creds:["api_key"] },
     'ollama':          { label:"Ollama Cloud",      icon:"fa-brain",           brand:false, color:"#7C3AED", creds:["api_key","host","model"] },
     'stripe':          { label:"Stripe",          icon:"fa-stripe-s",        brand:true,  color:"#635BFF", creds:["api_key"] },
@@ -1312,9 +1312,68 @@ const TOOLS = {
     'rss':             { label:"RSS Reader",      icon:"fa-rss",             brand:true,  color:"#EE802F", creds:["url"] },
     'webhook':         { label:"Generic Webhook", icon:"fa-link",            brand:false, color:"#6366F1", creds:["url"] },
     'http-custom':     { label:"Custom HTTP",     icon:"fa-globe",           brand:false, color:"#0EA5E9", creds:["url","method"] },
-    'pushover':        { label:"Pushover",        icon:"fa-bell",            brand:false, color:"#249DF1", creds:["app_token","user_key"] },
+    'buffer':          { label:"Buffer",          icon:"fa-buffer",          brand:true,  color:"#168EEA", creds:["api_key","channel_id"] },
+    'zernio':          { label:"Zernio",          icon:"custom-zernio",      brand:false, color:"#EB3514", creds:["api_key","account_id"] },
+    'pushover':        { label:"Pushover",        icon:"custom-pushover",    brand:false, color:"#249DF1", creds:["app_token","user_key"] },
     'mqtt':            { label:"MQTT (stub)",     icon:"fa-broadcast-tower", brand:false, color:"#660066", creds:[] },
 };
+
+
+// ============================================================
+// Tool icon renderer — handles Font Awesome icons AND custom SVGs
+// ============================================================
+function getToolIconHtml(toolKey, size) {
+    size = size || 14;
+    const tool = TOOLS[toolKey];
+    if (!tool) return '<i class="fas fa-plug"></i>';
+
+    // Custom Zernio brand mark (coral square with Z)
+    if (tool.icon === 'custom-zernio') {
+        return '<svg viewBox="0 0 32 32" width="' + size + '" height="' + size + '" xmlns="http://www.w3.org/2000/svg" style="display:block">'
+            + '<rect width="32" height="32" rx="6" fill="#EB3514"/>'
+            + '<path d="M9 9 L23 9 L23 13 L14 22 L23 22 L23 26 L9 26 L9 22 L18 13 L9 13 Z" fill="#FFFFFF"/>'
+            + '</svg>';
+    }
+    // Custom Gmail brand mark — split-color M
+    if (tool.icon === 'custom-gmail-envelope') {
+        return '<svg viewBox="0 0 32 32" width="' + size + '" height="' + size + '" xmlns="http://www.w3.org/2000/svg" style="display:block">'
+            + '<path d="M6 11 L9 11 L9 24 L6 24 Z" fill="#EA4335"/>'
+            + '<path d="M6 8 L9 8 L9 11 L6 11 Z" fill="#FB8C00"/>'
+            + '<path d="M23 17 L26 17 L26 24 L23 24 Z" fill="#34A853"/>'
+            + '<path d="M23 8 L26 8 L26 17 L23 17 Z" fill="#FBBC04"/>'
+            + '<path d="M6 8 L9 8 L16 16 L23 8 L26 8 L26 11 L16 21 L6 11 Z" fill="#4285F4"/>'
+            + '</svg>';
+    }
+
+    // Custom Notion brand mark (white "N" on black rounded square)
+    if (tool.icon === 'custom-notion') {
+        return '<svg viewBox="0 0 32 32" width="' + size + '" height="' + size + '" xmlns="http://www.w3.org/2000/svg" style="display:block">'
+            + '<rect width="32" height="32" rx="6" fill="#000000"/>'
+            + '<path d="M8 8 L8 24 L12 24 L12 14 L20 24 L24 24 L24 8 L20 8 L20 18 L12 8 Z" fill="#FFFFFF"/>'
+            + '</svg>';
+    }
+
+    // Custom OpenAI brand mark (teal circle with hexagon knot)
+    if (tool.icon === 'custom-openai') {
+        return '<svg viewBox="0 0 32 32" width="' + size + '" height="' + size + '" xmlns="http://www.w3.org/2000/svg" style="display:block">'
+            + '<rect width="32" height="32" rx="6" fill="#10A37F"/>'
+            + '<circle cx="16" cy="16" r="6" fill="none" stroke="#FFFFFF" stroke-width="2"/>'
+            + '<circle cx="16" cy="16" r="2" fill="#FFFFFF"/>'
+            + '</svg>';
+    }
+
+    // Custom Pushover brand mark (blue square with white bell)
+    if (tool.icon === 'custom-pushover') {
+        return '<svg viewBox="0 0 32 32" width="' + size + '" height="' + size + '" xmlns="http://www.w3.org/2000/svg" style="display:block">'
+            + '<rect width="32" height="32" rx="6" fill="#249DF1"/>'
+            + '<path d="M16 6 C11 6 8 10 8 15 L8 20 L6 22 L6 23 L26 23 L26 22 L24 20 L24 15 C24 10 21 6 16 6 Z M14 25 C14 26 15 27 16 27 C17 27 18 26 18 25 Z" fill="#FFFFFF"/>'
+            + '</svg>';
+    }
+
+    // Standard Font Awesome icon
+    const cls = tool.brand ? 'fab' : 'fas';
+    return '<i class="' + cls + ' ' + tool.icon + '"></i>';
+}
 
 const graph = new LGraph();
 const canvas = new LGraphCanvas("#mycanvas", graph);
@@ -2683,7 +2742,7 @@ async function openCredentialsPanel() {
             return `
                 <div class="flex items-center gap-2 p-2 rounded bg-slate-800/40 border border-slate-700">
                     <div class="tool-icon" style="--tool-color:${tool.color}">
-                        <i class="${tool.brand ? 'fab' : 'fas'} ${tool.icon}"></i>
+                        ${getToolIconHtml(key, 14)}
                     </div>
                     <span class="text-xs font-bold text-slate-200 flex-1">${tool.label}</span>
                     <span class="tool-badge ${isConfigured ? 'configured' : 'missing'}">${isConfigured ? 'configured' : 'not set'}</span>
@@ -2744,7 +2803,7 @@ async function openEditCredsModal(service) {
 
         overlay.innerHTML = `
             <div class="modal">
-                <h2><i class="${tool.brand ? 'fab' : 'fas'} ${tool.icon} mr-2" style="color:${tool.color}"></i>${tool.label} Credentials</h2>
+                <h2>${getToolIconHtml(service, 16).replace('<i ', '<i class="mr-2" ')}${tool.label} Credentials</h2>
                 <form id="credsForm">
                     ${fieldsHtml}
                     <div class="modal-buttons">
