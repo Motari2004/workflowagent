@@ -5,7 +5,7 @@ HTML = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\public\index.html'
 if not os.path.exists(HTML):
     print("ERROR: not found"); sys.exit(1)
 
-shutil.copy(HTML, HTML + '.backup_simple_sched')
+shutil.copy(HTML, HTML + '.backup_sched_isolate')
 print("Backed up\n")
 
 with open(HTML, 'r', encoding='utf-8') as f:
@@ -15,30 +15,36 @@ print("File: {} chars".format(len(html)))
 changes = 0
 
 # ═══════════════════════════════════════════════════════════════
-# Replace the entire openScheduleModal function
+# Replace openScheduleModal with an isolated version:
+#   - captures workflow name at open time
+#   - disables buttons while an operation is running
+#   - never reads stale DOM after modal is open
+#   - verifies name before every PUT
 # ═══════════════════════════════════════════════════════════════
-print("[1] Replacing openScheduleModal with simpler 12-hour version...")
+print("[1] Rewriting openScheduleModal with name isolation...")
 
+# Find the whole function
 old_fn_pattern = re.compile(
     r"async function openScheduleModal\(\) \{[\s\S]*?\n\}\n\nfunction updateScheduleBadge",
     re.DOTALL
 )
 
 new_fn = '''async function openScheduleModal() {
-    let name = document.getElementById('workflowName').value.trim();
+    // ── Capture the workflow name ONCE. Never read DOM again during the modal. ──
+    let capturedName = document.getElementById('workflowName').value.trim();
     if (document.getElementById('workflowInputContainer').style.display === 'none') {
-        name = document.getElementById('currentLoadedName').textContent.trim();
+        capturedName = document.getElementById('currentLoadedName').textContent.trim();
     }
-    if (!name) { toast('Save or name the workflow first', 'error'); return; }
+    if (!capturedName) { toast('Save or name the workflow first', 'error'); return; }
     
-    // Save canvas first so we don't lose nodes
+    // Save the canvas first (this uses the canvas state, not the modal)
     const saved = await saveCurrentWorkflow();
     if (!saved) { toast('Could not save workflow first', 'error'); return; }
     
-    // Fetch current mode + schedule
+    // Re-fetch — the save may have auto-named or adjusted
     let currentMode = 'once', currentSchedule = '';
     try {
-        const r = await fetch(`/workflows/${encodeURIComponent(name)}`);
+        const r = await fetch(`/workflows/${encodeURIComponent(capturedName)}`);
         if (r.ok) {
             const d = await r.json();
             currentMode = d.mode || 'once';
@@ -46,7 +52,7 @@ new_fn = '''async function openScheduleModal() {
         }
     } catch (_) {}
     
-    // Parse existing cron into hour/minute/am-pm (assume daily = "M H * * *")
+    // Parse existing cron to 12-hour time
     let initHour12 = 9, initMin = 0, initAmPm = 'AM', hasSchedule = currentMode === 'scheduled' && currentSchedule;
     if (hasSchedule) {
         const parts = currentSchedule.trim().split(/\\s+/);
@@ -67,30 +73,27 @@ new_fn = '''async function openScheduleModal() {
     overlay.className = 'modal-overlay';
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
     
-    // Build hour options 1-12
     let hourOpts = '';
     for (let h = 1; h <= 12; h++) {
         hourOpts += `<option value="${h}" ${h === initHour12 ? 'selected' : ''}>${h}</option>`;
     }
-    // Build minute options (00, 05, 10, ..., 55)
     let minOpts = '';
     for (let m = 0; m < 60; m += 5) {
         const mm = String(m).padStart(2, '0');
         minOpts += `<option value="${m}" ${m === initMin ? 'selected' : ''}>${mm}</option>`;
     }
     
-    const timeDisplay = hasSchedule 
-        ? `${initHour12}:${String(initMin).padStart(2,'0')} ${initAmPm} (UTC) daily` 
+    const timeDisplay = hasSchedule
+        ? `${initHour12}:${String(initMin).padStart(2,'0')} ${initAmPm} (UTC) daily`
         : 'not scheduled';
     
     overlay.innerHTML = `
         <div class="modal" style="width: 480px;">
             <h2 style="margin-top:0; font-size:16px; display:flex; align-items:center; gap:8px;">
-                <i class="fas fa-clock text-blue-400"></i> Schedule "${name}"
+                <i class="fas fa-clock text-blue-400"></i> Schedule "<span id="modalWorkflowName">${capturedName}</span>"
             </h2>
             <p style="font-size:12px; color:#94a3b8; margin-bottom:20px; line-height:1.5;">
-                Runs <strong>once per day</strong> at the time you set below.
-                If the scheduler wakes up late, the workflow still runs — catch-up handles it.
+                Runs <strong>once per day</strong> at the time you set below. Catch-up handles missed slots.
             </p>
             
             <div style="margin-bottom:8px;">
@@ -135,8 +138,20 @@ new_fn = '''async function openScheduleModal() {
     const ampmSel = document.getElementById('modalAmPm');
     const preview = document.getElementById('modalPreview');
     const removeBtn = document.getElementById('modalRemoveBtn');
+    const saveBtn = document.getElementById('modalSaveBtn');
+    const cancelBtn = document.getElementById('modalCancelBtn');
     
-    // Update preview when any picker changes
+    // Prevent race: mark modal busy while any save/remove is in flight
+    let busy = false;
+    function setBusy(v) {
+        busy = v;
+        saveBtn.disabled = v;
+        removeBtn.disabled = v;
+        cancelBtn.disabled = v;
+        saveBtn.textContent = v ? 'Working...' : 'Save Schedule';
+        removeBtn.textContent = v ? 'Working...' : 'Stop Schedule';
+    }
+    
     function updatePreview() {
         const h = parseInt(hourSel.value);
         const m = String(parseInt(minSel.value)).padStart(2, '0');
@@ -147,53 +162,62 @@ new_fn = '''async function openScheduleModal() {
     minSel.addEventListener('change', updatePreview);
     ampmSel.addEventListener('change', updatePreview);
     
-    // Cancel
-    document.getElementById('modalCancelBtn').addEventListener('click', () => overlay.remove());
+    cancelBtn.addEventListener('click', () => overlay.remove());
     
-    // Stop schedule
+    // Stop Schedule — uses capturedName, NEVER the DOM
     removeBtn.addEventListener('click', async () => {
+        if (busy) return;
+        setBusy(true);
         try {
-            const r = await fetch(`/workflows/${encodeURIComponent(name)}`);
-            const wf = r.ok ? await r.json() : {};
+            const r = await fetch(`/workflows/${encodeURIComponent(capturedName)}`);
+            if (!r.ok) throw new Error('workflow not found');
+            const wf = await r.json();
             wf.mode = 'once';
             wf.schedule = '';
             wf.last_run_at = null;
             
-            const saveRes = await fetch(`/workflows/${encodeURIComponent(name)}`, {
+            const saveRes = await fetch(`/workflows/${encodeURIComponent(capturedName)}`, {
                 method: 'PUT',
                 headers: {'Content-Type':'application/json'},
                 body: JSON.stringify(wf)
             });
-            if (saveRes.ok) {
-                toast('Schedule stopped', 'success');
-                overlay.remove();
+            if (!saveRes.ok) throw new Error('save failed ' + saveRes.status);
+            
+            toast('Schedule removed from "' + capturedName + '"', 'success');
+            overlay.remove();
+            
+            // Update badge only if the CURRENTLY loaded workflow is still this one
+            const currentName = document.getElementById('currentLoadedName').textContent.trim();
+            if (currentName === capturedName) {
                 updateScheduleBadge('once', '');
-                await refreshWorkflowList();
             }
+            await refreshWorkflowList();
         } catch (e) {
             toast('Error: ' + e.message, 'error');
+            setBusy(false);
         }
     });
     
-    // Save schedule — convert 12h time to cron
-    document.getElementById('modalSaveBtn').addEventListener('click', async () => {
-        const h = parseInt(hourSel.value);       // 1..12
-        const m = parseInt(minSel.value);         // 0..55
-        const ap = ampmSel.value;                 // 'AM' or 'PM'
+    // Save Schedule — uses capturedName, NEVER the DOM
+    saveBtn.addEventListener('click', async () => {
+        if (busy) return;
+        setBusy(true);
         
-        // Convert 12h to 24h
+        const h = parseInt(hourSel.value);
+        const m = parseInt(minSel.value);
+        const ap = ampmSel.value;
+        
         let hour24;
         if (ap === 'AM') {
             hour24 = (h === 12) ? 0 : h;
         } else {
             hour24 = (h === 12) ? 12 : (h + 12);
         }
-        
-        // Build cron expression: "M H * * *"
         const cronExpr = `${m} ${hour24} * * *`;
         
         try {
-            const r = await fetch(`/workflows/${encodeURIComponent(name)}`);
+            const r = await fetch(`/workflows/${encodeURIComponent(capturedName)}`);
+            if (!r.ok) throw new Error('workflow not found');
             const wf = await r.json();
             wf.mode = 'scheduled';
             wf.schedule = cronExpr;
@@ -201,22 +225,26 @@ new_fn = '''async function openScheduleModal() {
                 wf.last_run_at = new Date(Date.now() - 24*60*60*1000).toISOString().replace('.000', '');
             }
             
-            const saveRes = await fetch(`/workflows/${encodeURIComponent(name)}`, {
+            const saveRes = await fetch(`/workflows/${encodeURIComponent(capturedName)}`, {
                 method: 'PUT',
                 headers: {'Content-Type':'application/json'},
                 body: JSON.stringify(wf)
             });
-            if (saveRes.ok) {
-                const timeStr = `${h}:${String(m).padStart(2, '0')} ${ap}`;
-                toast('Scheduled daily at ' + timeStr + ' UTC', 'success');
-                overlay.remove();
+            if (!saveRes.ok) throw new Error('save failed ' + saveRes.status);
+            
+            const timeStr = `${h}:${String(m).padStart(2, '0')} ${ap}`;
+            toast('Scheduled "' + capturedName + '" daily at ' + timeStr + ' UTC', 'success');
+            overlay.remove();
+            
+            // Update badge only if the CURRENTLY loaded workflow is still this one
+            const currentName = document.getElementById('currentLoadedName').textContent.trim();
+            if (currentName === capturedName) {
                 updateScheduleBadge('scheduled', cronExpr);
-                await refreshWorkflowList();
-            } else {
-                toast('Save failed', 'error');
             }
+            await refreshWorkflowList();
         } catch (e) {
             toast('Error: ' + e.message, 'error');
+            setBusy(false);
         }
     });
 }
@@ -224,93 +252,38 @@ new_fn = '''async function openScheduleModal() {
 function updateScheduleBadge'''
 
 if old_fn_pattern.search(html):
-    # ★ Use lambda to avoid escape processing in replacement string
     html = old_fn_pattern.sub(lambda m: new_fn, html, count=1)
     changes += 1
-    print("  OK — openScheduleModal replaced with 12-hour version")
+    print("  OK — openScheduleModal rewritten with name isolation")
 else:
     print("  FAIL — openScheduleModal pattern not matched")
 
 # ═══════════════════════════════════════════════════════════════
-# Update the badge to show a friendlier label
+# Also close any open modal when a different workflow is loaded
+# (prevents the "still-open modal for wrong workflow" scenario)
 # ═══════════════════════════════════════════════════════════════
-print("\n[2] Improving badge display...")
+print("\n[2] Auto-close schedule modal when workflow changes...")
 
-old_badge = '''function updateScheduleBadge(mode, schedule) {
-    const badge = document.getElementById('schedBadge');
-    if (!badge) return;
-    if (mode === 'scheduled' && schedule) {
-        badge.textContent = '🔄';
-        badge.style.color = '#22c55e';
-        badge.title = 'Scheduled: ' + schedule;
-    } else {
-        badge.textContent = '';
-        badge.title = '';
-    }
-}'''
+# Add to loadWorkflowFromSelector — close any open modals at the start
+old_load_start = '''async function loadWorkflowFromSelector(name) {
+    if (!name) return; 
 
-new_badge = '''function updateScheduleBadge(mode, schedule) {
-    const badge = document.getElementById('schedBadge');
-    if (!badge) return;
-    if (mode === 'scheduled' && schedule) {
-        let label = 'daily';
-        try {
-            const parts = schedule.trim().split(/\\s+/);
-            if (parts.length === 5) {
-                const min = parseInt(parts[0]) || 0;
-                const hour24 = parseInt(parts[1]) || 0;
-                let h12, ap;
-                if (hour24 === 0) { h12 = 12; ap = 'AM'; }
-                else if (hour24 === 12) { h12 = 12; ap = 'PM'; }
-                else if (hour24 < 12) { h12 = hour24; ap = 'AM'; }
-                else { h12 = hour24 - 12; ap = 'PM'; }
-                label = `${h12}:${String(min).padStart(2,'0')} ${ap}`;
-            }
-        } catch (_) {}
-        badge.textContent = label;
-        badge.style.color = '#22c55e';
-        badge.title = 'Scheduled: ' + schedule;
-    } else {
-        badge.textContent = '';
-        badge.title = '';
-    }
-}'''
+    confirmLoadWorkflow(name, async () => {
+        try {'''
 
-if old_badge in html:
-    # Use lambda too — the badge contains regex escape \s
-    html = html.replace(old_badge, new_badge, 1)
+new_load_start = '''async function loadWorkflowFromSelector(name) {
+    if (!name) return; 
+
+    // Close any open modal (prevents stale schedule modal from acting on the wrong workflow)
+    document.querySelectorAll('.modal-overlay').forEach(m => m.remove());
+
+    confirmLoadWorkflow(name, async () => {
+        try {'''
+
+if old_load_start in html:
+    html = html.replace(old_load_start, new_load_start, 1)
     changes += 1
-    print("  OK — badge shows friendly time (e.g. '9:00 AM')")
-
-# ═══════════════════════════════════════════════════════════════
-# Also improve the dropdown labels — show friendly time instead of raw cron
-# ═══════════════════════════════════════════════════════════════
-print("\n[3] Improving dropdown labels...")
-
-old_dropdown = '''opt.textContent = (mode === 'scheduled' ? '🔄 ' : '') + name + (schedule ? ` [${schedule}]` : '');'''
-
-new_dropdown = '''let timeLabel = '';
-                if (mode === 'scheduled' && schedule) {
-                    try {
-                        const parts = schedule.trim().split(/\\s+/);
-                        if (parts.length === 5) {
-                            const min = parseInt(parts[0]) || 0;
-                            const hour24 = parseInt(parts[1]) || 0;
-                            let h12, ap;
-                            if (hour24 === 0) { h12 = 12; ap = 'AM'; }
-                            else if (hour24 === 12) { h12 = 12; ap = 'PM'; }
-                            else if (hour24 < 12) { h12 = hour24; ap = 'AM'; }
-                            else { h12 = hour24 - 12; ap = 'PM'; }
-                            timeLabel = ` — ${h12}:${String(min).padStart(2,'0')} ${ap}`;
-                        }
-                    } catch (_) {}
-                }
-                opt.textContent = (mode === 'scheduled' ? '🔄 ' : '') + name + timeLabel;'''
-
-if old_dropdown in html:
-    html = html.replace(old_dropdown, new_dropdown, 1)
-    changes += 1
-    print("  OK — dropdown shows friendly time (e.g. '🔄 daily-report — 9:00 AM')")
+    print("  OK — modals close when loading a different workflow")
 
 with open(HTML, 'w', encoding='utf-8') as f:
     f.write(html)
@@ -318,21 +291,21 @@ with open(HTML, 'w', encoding='utf-8') as f:
 # ═══════════════════════════════════════════════════════════════
 # Verify
 # ═══════════════════════════════════════════════════════════════
-print("\n[4] Verifying...")
+print("\n[3] Verifying...")
 
 final = open(HTML, 'r', encoding='utf-8').read()
 
 checks = [
-    ("12-hour hour picker",        'id="modalHour"' in final),
-    ("12-hour minute picker",      'id="modalMin"' in final),
-    ("AM/PM selector",             'id="modalAmPm"' in final),
-    ("No mode dropdown",           'id="modalSchedMode"' not in final),
-    ("Preview updates on change",  'function updatePreview()' in final),
-    ("Converts 12h to cron",       'hour24 = (h === 12) ? 0 : h' in final),
-    ("Badge shows friendly time",  'badge.textContent = label' in final),
-    ("Dropdown shows friendly",    'timeLabel = ` — ${h12}:' in final),
-    ("Stop Schedule button",       'id="modalRemoveBtn"' in final),
-    ("Save Schedule button",       'id="modalSaveBtn"' in final),
+    ("captures name once",           'let capturedName = document.getElementById' in final),
+    ("shows name in modal title",    'id="modalWorkflowName"' in final),
+    ("uses capturedName in fetch",   'fetch(`/workflows/${encodeURIComponent(capturedName)}`)' in final),
+    ("uses capturedName in PUT",     'fetch(`/workflows/${encodeURIComponent(capturedName)}`' in final),
+    ("prevents double-click",        'if (busy) return;' in final),
+    ("busy disables buttons",        'saveBtn.disabled = v;' in final),
+    ("badge only updates if same",   "if (currentName === capturedName)" in final),
+    ("modals close on load",         "document.querySelectorAll('.modal-overlay').forEach(m => m.remove());\n\n    confirmLoadWorkflow" in final),
+    ("confirms name in toast",       "toast('Schedule removed from \"' + capturedName" in final),
+    ("12-hour picker intact",        'id="modalHour"' in final),
 ]
 
 all_ok = True
@@ -348,8 +321,7 @@ if all_ok:
     print("=" * 55)
     print("\nNext:")
     print("  git add public/index.html")
-    print("  git commit -m 'Schedule modal: 12-hour time picker, no mode dropdown'")
+    print("  git commit -m 'Fix schedule modal: isolate workflow name, disable during ops, close on workflow switch'")
     print("  git push origin main")
 else:
     print("Review FAIL lines above")
-    print("Backup: index.html.backup_simple_sched")
