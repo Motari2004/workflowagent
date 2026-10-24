@@ -1942,18 +1942,37 @@ LiteGraph.registerNodeType("tool/integration", NodeTool);
 
 // Sync widget values after load
 NodeTool.prototype.onConfigure = function(info) {
-    // Clean any template syntax that a saved workflow might contain
-    function stripTemplates(str) {
+    // Clean any template syntax AND brackets that a saved workflow might contain
+    function clean(str) {
         if (typeof str !== 'string') return str;
-        // Remove ${...} and {{...}} patterns - these aren't supported
-        return str.replace(/\$\{[^}]*\}/g, '').replace(/\{\{[^}]*\}\}/g, '').trim();
+        // Strip templates
+        var s = str.replace(/\$\{[^}]*\}/g, '').replace(/\{\{[^}]*\}\}/g, '').trim();
+        // Unwrap JSON array string: ["https://..."] -> https://...
+        if (s.startsWith('[') && s.endsWith(']')) {
+            try {
+                var parsed = JSON.parse(s);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    s = String(parsed[0]).trim();
+                } else {
+                    s = '';
+                }
+            } catch (_) {
+                // Not valid JSON — try naive strip
+                s = s.replace(/^\[\s*"?/, '').replace(/"?\s*\]$/, '').trim();
+            }
+        }
+        // Strip surrounding quotes
+        if (s.startsWith('"') && s.endsWith('"') && s.length > 2) {
+            s = s.slice(1, -1).trim();
+        }
+        return s;
     }
     
     if (info && info.properties) {
         if (typeof info.properties.service === "string") this.properties.service = info.properties.service;
-        if (typeof info.properties.message === "string") this.properties.message = stripTemplates(info.properties.message);
+        if (typeof info.properties.message === "string") this.properties.message = clean(info.properties.message);
         if (typeof info.properties.platform === "string") this.properties.platform = info.properties.platform;
-        if (typeof info.properties.media_urls === "string") this.properties.media_urls = stripTemplates(info.properties.media_urls);
+        if (typeof info.properties.media_urls === "string") this.properties.media_urls = clean(info.properties.media_urls);
     }
     
     // Sync widgets from cleaned properties
@@ -2282,16 +2301,103 @@ function buildPayload() {
             case 'logic/compare': payload.push({type:'compare', data:{operator:d.operator||'>', threshold:Number(d.threshold)||0}}); break;
             case 'logic/json-extract': payload.push({type:'json-extract', data:{path:d.path||''}}); break;
             case 'tool/integration': {
-                function stripT(str) {
+                function stripTemplates(str) {
                     if (typeof str !== 'string') return str;
                     return str.replace(/\$\{[^}]*\}/g, '').replace(/\{\{[^}]*\}\}/g, '').trim();
                 }
-                const mediaStr = stripT(d.media_urls || '').trim();
-                const mediaList = mediaStr ? mediaStr.split(/[,\n]+/).map(s => stripT(s.trim())).filter(Boolean) : [];
+
+                // Bulletproof media URL parser.
+                // Accepts:
+                //   - Bare URL: "https://a.com/x.jpg"
+                //   - Array: ["https://a.com/x.jpg"]
+                //   - JSON array string: '["https://a.com/x.jpg"]'
+                //   - Comma-separated: "https://a.com/x.jpg, https://b.com/y.jpg"
+                //   - Newline-separated
+                //   - Nested JSON array strings inside arrays
+                //   - Template syntax: "${...}" (stripped)
+                // Returns: array of clean, valid URLs.
+                function parseMediaUrls(raw) {
+                    var result = [];
+                    
+                    function pushUrl(u) {
+                        if (typeof u !== 'string') return;
+                        var s = stripTemplates(u);
+                        if (!s) return;
+                        // Must look like a URL
+                        if (s.startsWith('http://') || s.startsWith('https://')) {
+                            result.push(s);
+                        }
+                    }
+                    
+                    function walk(val, depth) {
+                        if (depth > 5) return;  // safety against deeply nested
+                        if (val === null || val === undefined) return;
+                        
+                        if (Array.isArray(val)) {
+                            for (var i = 0; i < val.length; i++) walk(val[i], depth + 1);
+                            return;
+                        }
+                        
+                        if (typeof val !== 'string') return;
+                        
+                        var s = stripTemplates(val);
+                        if (!s) return;
+                        
+                        // Try JSON parse if it looks like an array
+                        var trimmed = s.trim();
+                        if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+                            try {
+                                var parsed = JSON.parse(trimmed);
+                                walk(parsed, depth + 1);
+                                return;
+                            } catch (_) { /* fall through */ }
+                        }
+                        
+                        // Try JSON parse if it looks like a single JSON string ""...""
+                        if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length > 2) {
+                            try {
+                                var inner = JSON.parse(trimmed);
+                                walk(inner, depth + 1);
+                                return;
+                            } catch (_) { /* fall through */ }
+                        }
+                        
+                        // Comma or newline separated?
+                        if (trimmed.indexOf(',') !== -1 || trimmed.indexOf('\n') !== -1) {
+                            var parts = trimmed.split(/[,\n]+/);
+                            for (var j = 0; j < parts.length; j++) pushUrl(parts[j]);
+                            return;
+                        }
+                        
+                        // Bare URL
+                        pushUrl(trimmed);
+                    }
+                    
+                    walk(raw, 0);
+                    
+                    // Dedupe while preserving order
+                    var seen = {};
+                    var deduped = [];
+                    for (var k = 0; k < result.length; k++) {
+                        if (!seen[result[k]]) {
+                            seen[result[k]] = true;
+                            deduped.push(result[k]);
+                        }
+                    }
+                    return deduped;
+                }
+
+                const mediaList = parseMediaUrls(d.media_urls);
+                const cleanMessage = stripTemplates(d.message || '');
+                // If message somehow ended up as a JSON array string, blank it
+                const messageFinal = (cleanMessage.startsWith('[') && cleanMessage.endsWith(']'))
+                    ? ''
+                    : cleanMessage;
+
                 payload.push({type:'tool', data:{
-                    service: d.service||'http-custom',
-                    message: stripT(d.message || ''),
-                    platform: d.platform||'instagram',
+                    service: d.service || 'http-custom',
+                    message: messageFinal,
+                    platform: d.platform || 'instagram',
                     media_urls: mediaList
                 }});
                 break;

@@ -1060,10 +1060,20 @@ def tool_buffer(creds, msg, extra):
 
 
 def tool_zernio(creds, msg, extra):
-    """Post to Zernio. Requires api_key (sk_...) and account_id.
-    platform: instagram | facebook | tiktok | twitter | linkedin | threads | etc.
-    media_urls: list of image/video URLs (REQUIRED for Instagram).
+    """Post to Zernio using the CORRECT API schema.
+    
+    Zernio API (verified from docs):
+    POST https://zernio.com/api/v1/posts
+    - content: post text
+    - mediaItems: [{url, type}]  ← NOT mediaUrls
+    - platforms: [{platform, accountId}]  ← accountId is REQUIRED
+    - publishNow: true (for immediate post)
+    - Idempotency-Key header: unique per logical post (UUID) — required for retries
+    
+    Instagram requires at least one mediaItems entry.
     """
+    import uuid as _uuid
+    
     token = creds.get("api_key")
     account_id = creds.get("account_id")
 
@@ -1092,45 +1102,58 @@ def tool_zernio(creds, msg, extra):
             "Must be one of: " + ", ".join(sorted(valid_platforms))
         )
 
-    # Media URLs - required for Instagram, optional elsewhere
-    print("[zernio] === ENTRY POINT ===")
-    print("[zernio] extra type: " + str(type(extra)))
-    print("[zernio] extra: " + repr(extra)[:500])
-    print("[zernio] extra.media_urls: " + repr((extra or {}).get("media_urls")))
-    
+    # Collect media URLs from node data
     media_urls = (extra or {}).get("media_urls") or []
     if isinstance(media_urls, str):
         media_urls = [media_urls]
-    media_urls = [u for u in media_urls if u and u.strip()]
+    media_urls = [u.strip() for u in media_urls if u and u.strip()]
 
-    # ===== DIAGNOSTIC =====
-    print("[zernio-diag] platform=" + str(platform))
-    print("[zernio-diag] media_urls RAW = " + repr(media_urls))
-    print("[zernio-diag] extra keys = " + str(list((extra or {}).keys())))
-    print("[zernio-diag] creds keys = " + str(list((creds or {}).keys())))
-    # ======================
-
+    # Instagram REQUIRES media
     if platform == "instagram" and not media_urls:
-        return "[ERROR] Zernio: Instagram requires at least one image or video URL (media_urls)"
+        return "[ERROR] Zernio: Instagram requires media_items (at least one image URL)"
 
     text = msg.strip()
 
+    # Build mediaItems: [{url, type}]
+    # type inferred from extension; fallback "image"
+    def _infer_type(url):
+        u = url.lower().split("?")[0]
+        if u.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
+            return "image"
+        if u.endswith((".mp4", ".mov", ".avi", ".webm", ".m4v")):
+            return "video"
+        if u.endswith(".pdf"):
+            return "document"
+        if u.endswith(".gif"):
+            return "gif"
+        return "image"  # default
+
+    media_items = [
+        {"url": u, "type": _infer_type(u)}
+        for u in media_urls
+    ]
+
+    # CORRECT payload per Zernio API docs
     payload = {
         "content": text,
         "publishNow": True,
-        "platform": platform,
-        "platforms": [{"accountId": account_id, "platform": platform}],
+        "platforms": [{
+            "platform": platform,
+            "accountId": account_id,
+        }],
     }
-    if media_urls:
-        payload["mediaUrls"] = media_urls
-        payload["media_urls"] = media_urls
-        payload["media"] = [{"url": u, "type": "image"} for u in media_urls]
+    if media_items:
+        payload["mediaItems"] = media_items
 
-    print("[zernio] ===== FULL PAYLOAD =====")
+    # Idempotency-Key: unique UUID per request — prevents 409 on retry
+    idem_key = str(_uuid.uuid4())
+
+    print("[zernio] === FULL PAYLOAD (corrected schema) ===")
     print("[zernio] keys: " + str(list(payload.keys())))
     for k, v in payload.items():
         print("[zernio]   " + k + " = " + repr(v)[:300])
-    print("[zernio] =========================")
+    print("[zernio] Idempotency-Key: " + idem_key)
+    print("[zernio] ==========================================")
 
     try:
         r = requests.post(
@@ -1138,30 +1161,49 @@ def tool_zernio(creds, msg, extra):
             headers={
                 "Authorization": "Bearer " + token,
                 "Content-Type": "application/json",
+                "Idempotency-Key": idem_key,
             },
             json=payload,
-            timeout=20,
+            timeout=30,
         )
-        print("[zernio] RESPONSE " + str(r.status_code) + ": " + r.text[:500])
+        print("[zernio] RESPONSE " + str(r.status_code) + ": " + r.text[:800])
     except requests.exceptions.Timeout:
-        return "[ERROR] Zernio: timeout (20s)"
+        return "[ERROR] Zernio: timeout (30s)"
     except requests.exceptions.RequestException as e:
         return "[ERROR] Zernio: network: " + str(e)
 
-    if r.status_code in (200, 201):
+    if r.status_code in (200, 201, 207):
         try:
             data = r.json()
-            post_id = data.get("_id") or data.get("id", "?")
-            media_note = " with " + str(len(media_urls)) + " media" if media_urls else ""
-            return "Zernio " + str(r.status_code) + ": posted to " + platform + media_note + " (id=" + str(post_id) + ")"
-        except Exception:
-            return "Zernio " + str(r.status_code) + ": posted to " + platform
+            post = data.get("post") or {}
+            post_id = post.get("_id") or data.get("_id") or "?"
+            status = post.get("status", "?")
+            # platformPostUrl is the actual post URL on Instagram/FB/etc
+            post_url = ""
+            for p in (post.get("platforms") or []):
+                if p.get("platformPostUrl"):
+                    post_url = p["platformPostUrl"]
+                    break
+            media_note = " with " + str(len(media_items)) + " media" if media_items else ""
+            result = "Zernio " + str(r.status_code) + ": posted to " + platform + media_note + " (id=" + str(post_id) + ", status=" + status + ")"
+            if post_url:
+                result += " → " + post_url
+            return result
+        except Exception as e:
+            return "Zernio " + str(r.status_code) + ": posted (parse error: " + str(e) + ")"
 
     if r.status_code == 401:
         return "[ERROR] Zernio: 401 Unauthorized - check API key"
+    if r.status_code == 403:
+        return "[ERROR] Zernio: 403 Forbidden - check account permissions: " + r.text[:300]
+    if r.status_code == 400:
+        return "[ERROR] Zernio 400 (bad request): " + r.text[:500]
     if r.status_code == 409:
-        return "[ERROR] Zernio: 409 duplicate content (same content posted within 24h)"
-    return "[ERROR] Zernio " + str(r.status_code) + ": " + r.text[:300]
+        return "[ERROR] Zernio 409 (duplicate): " + r.text[:500]
+    if r.status_code == 429:
+        return "[ERROR] Zernio 429 (rate limited): " + r.text[:300]
+    return "[ERROR] Zernio " + str(r.status_code) + ": " + r.text[:500]
+
 
 
 TOOL_HANDLERS = {
