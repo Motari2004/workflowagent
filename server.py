@@ -1,6 +1,16 @@
 from flask import Flask, request, jsonify, send_from_directory, make_response
 from flask_cors import CORS
 import requests
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+    _HAS_PSYCOPG = True
+except ImportError:
+    psycopg = None
+    dict_row = None
+    ConnectionPool = None
+    _HAS_PSYCOPG = False
 
 from dotenv import load_dotenv
 import os as _os
@@ -143,30 +153,178 @@ def add_cors_headers(response):
 
 SYMBOL_MAP = {'bitcoin':'BTC','ethereum':'ETH','solana':'SOL','binancecoin':'BNB','cardano':'ADA','ripple':'XRP','dogecoin':'DOGE'}
 
-DATA_DIR = Path("workflows"); DATA_DIR.mkdir(exist_ok=True)
-LOG_DIR  = Path("execution_logs"); LOG_DIR.mkdir(exist_ok=True)
-CREDS_DIR = Path("credentials"); CREDS_DIR.mkdir(exist_ok=True)
+
+
+
+
+
 
 
 # ============================================================
-# AI MEMORY — persistent across sessions
+# STORAGE — Postgres (Neon) when DATABASE_URL is set, else local files
 # ============================================================
-MEMORY_DIR = Path("memory"); MEMORY_DIR.mkdir(exist_ok=True)
-SESSIONS_DIR = MEMORY_DIR / "sessions"; SESSIONS_DIR.mkdir(exist_ok=True)
-FACTS_FILE = MEMORY_DIR / "facts.json"
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USE_DB = bool(DATABASE_URL) and _HAS_PSYCOPG
+
+_pool = None
+if USE_DB:
+    try:
+        _pool = ConnectionPool(
+            conninfo=DATABASE_URL,
+            min_size=1,
+            max_size=4,
+            timeout=10,
+            kwargs={"autocommit": True, "row_factory": dict_row},
+        )
+        print("[db] Neon Postgres pool ready")
+    except Exception as _e:
+        print(f"[db] Pool init failed: {_e} — falling back to local files")
+        _pool = None
+        USE_DB = False
+
+# Legacy filesystem paths (only used when USE_DB is False, e.g. local dev)
+_IS_SERVERLESS = bool(
+    os.environ.get("VERCEL")
+    or os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+    or os.environ.get("AWS_EXECUTION_ENV")
+)
+
+if _IS_SERVERLESS and not USE_DB:
+    _BASE = Path("/tmp") / "workflow-pro"
+    _BASE.mkdir(parents=True, exist_ok=True)
+else:
+    _BASE = Path(".")
+
+DATA_DIR     = _BASE / "workflows"
+LOG_DIR      = _BASE / "execution_logs"
+CREDS_DIR    = _BASE / "credentials"
+MEMORY_DIR   = _BASE / "memory"
+SESSIONS_DIR = MEMORY_DIR / "sessions"
+FACTS_FILE   = MEMORY_DIR / "facts.json"
 SUMMARY_FILE = MEMORY_DIR / "summary.json"
 
+if not USE_DB:
+    DATA_DIR.mkdir(exist_ok=True)
+    LOG_DIR.mkdir(exist_ok=True)
+    CREDS_DIR.mkdir(exist_ok=True)
+    MEMORY_DIR.mkdir(exist_ok=True)
+    SESSIONS_DIR.mkdir(exist_ok=True)
+
+print(f"[storage] mode={'postgres' if USE_DB else 'filesystem'} base={_BASE.resolve()}")
+
+
+# ============================================================
+# Schema bootstrap — safe to run every boot
+# ============================================================
+def _db_init_schema():
+    if not USE_DB or _pool is None:
+        return
+    try:
+        with _pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS workflows (
+                    name        TEXT PRIMARY KEY,
+                    payload     JSONB NOT NULL,
+                    updated_at  TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS credentials (
+                    service     TEXT PRIMARY KEY,
+                    payload     JSONB NOT NULL,
+                    updated_at  TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS execution_logs (
+                    id          BIGSERIAL PRIMARY KEY,
+                    workflow    TEXT NOT NULL,
+                    source      TEXT NOT NULL,
+                    status      TEXT,
+                    result      JSONB,
+                    logs        JSONB,
+                    created_at  TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_exec_wf_created
+                    ON execution_logs(workflow, created_at DESC);
+                CREATE TABLE IF NOT EXISTS memory_messages (
+                    id          BIGSERIAL PRIMARY KEY,
+                    created_at  TIMESTAMPTZ DEFAULT NOW(),
+                    role        TEXT NOT NULL,
+                    text        TEXT NOT NULL,
+                    session_id  TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_mem_created
+                    ON memory_messages(created_at DESC);
+                CREATE TABLE IF NOT EXISTS memory_facts (
+                    key         TEXT PRIMARY KEY,
+                    value       JSONB,
+                    updated_at  TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+        print("[db] schema ensured")
+    except Exception as e:
+        print(f"[db] schema init failed: {e}")
+
+_db_init_schema()
+
+
+def _db_exec(query, params=None):
+    """Execute a write query. Returns True on success."""
+    if not USE_DB or _pool is None:
+        return False
+    try:
+        with _pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(query, params or ())
+        return True
+    except Exception as e:
+        print(f"[db] exec failed: {e}")
+        return False
+
+
+def _db_one(query, params=None):
+    """Fetch one row as dict, or None."""
+    if not USE_DB or _pool is None:
+        return None
+    try:
+        with _pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(query, params or ())
+            return cur.fetchone()
+    except Exception as e:
+        print(f"[db] query failed: {e}")
+        return None
+
+
+def _db_all(query, params=None):
+    """Fetch all rows as list of dicts."""
+    if not USE_DB or _pool is None:
+        return []
+    try:
+        with _pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(query, params or ())
+            return cur.fetchall() or []
+    except Exception as e:
+        print(f"[db] query failed: {e}")
+        return []
+
+
+
+
+
+
+
 def memory_save_message(role, text, session_id=None):
-    """Append one message to today's session log."""
+    """Append one message to memory."""
     from datetime import datetime as _dt
+    text = (text or "")[:5000]
+    if USE_DB:
+        _db_exec(
+            """INSERT INTO memory_messages (role, text, session_id)
+               VALUES (%s, %s, %s)""",
+            (role, text, session_id or "default")
+        )
+        return {"ts": _dt.utcnow().isoformat() + "Z", "role": role,
+                "text": text, "session_id": session_id or "default"}
     today = _dt.utcnow().strftime("%Y-%m-%d")
     path = SESSIONS_DIR / f"{today}.jsonl"
-    entry = {
-        "ts": _dt.utcnow().isoformat() + "Z",
-        "role": role,
-        "text": text[:5000],  # cap at 5k per message
-        "session_id": session_id or "default"
-    }
+    entry = {"ts": _dt.utcnow().isoformat() + "Z", "role": role,
+             "text": text, "session_id": session_id or "default"}
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
     return entry
@@ -174,6 +332,17 @@ def memory_save_message(role, text, session_id=None):
 def memory_recent(hours=24, limit=30):
     """Load messages from the last N hours."""
     from datetime import datetime as _dt, timedelta
+    if USE_DB:
+        rows = _db_all(
+            """SELECT created_at AS ts, role, text, session_id
+               FROM memory_messages
+               WHERE created_at > NOW() - INTERVAL '%s hours'
+               ORDER BY created_at ASC LIMIT %s""",
+            (int(hours), int(limit))
+        )
+        for r in rows:
+            if r.get("ts"): r["ts"] = r["ts"].isoformat() + "Z"
+        return rows
     cutoff = _dt.utcnow() - timedelta(hours=hours)
     messages = []
     for p in sorted(SESSIONS_DIR.glob("*.jsonl"), reverse=True):
@@ -194,6 +363,14 @@ def memory_recent(hours=24, limit=30):
 
 def memory_load_facts():
     """Load long-term facts (name, preferences, etc)."""
+    if USE_DB:
+        rows = _db_all("SELECT key, value FROM memory_facts")
+        facts = {r["key"]: r["value"] for r in rows}
+        return {
+            "name": facts.get("name"),
+            "preferences": facts.get("preferences", []) if isinstance(facts.get("preferences"), list) else [],
+            "projects": facts.get("projects", []) if isinstance(facts.get("projects"), list) else [],
+        }
     if FACTS_FILE.exists():
         try:
             return json.loads(FACTS_FILE.read_text(encoding="utf-8"))
@@ -203,6 +380,15 @@ def memory_load_facts():
 
 def memory_save_fact(key, value):
     """Save a fact to remember forever."""
+    if USE_DB:
+        _db_exec(
+            """INSERT INTO memory_facts (key, value, updated_at)
+               VALUES (%s, %s::jsonb, NOW())
+               ON CONFLICT (key) DO UPDATE SET
+                 value = EXCLUDED.value, updated_at = NOW()""",
+            (key, json.dumps(value))
+        )
+        return memory_load_facts()
     facts = memory_load_facts()
     facts[key] = value
     FACTS_FILE.write_text(json.dumps(facts, indent=2), encoding="utf-8")
@@ -239,22 +425,69 @@ _scheduler_lock = threading.Lock()
 
 # ---------- Workflow storage ----------
 def save_workflow(name, wf):
+    if USE_DB:
+        _db_exec(
+            """INSERT INTO workflows (name, payload, updated_at)
+               VALUES (%s, %s::jsonb, NOW())
+               ON CONFLICT (name) DO UPDATE SET
+                 payload = EXCLUDED.payload,
+                 updated_at = NOW()""",
+            (name, json.dumps(wf))
+        )
+        return
     (DATA_DIR / f"{name}.json").write_text(json.dumps(wf, indent=2), encoding='utf-8')
+
 def load_workflow(name):
+    if USE_DB:
+        row = _db_one("SELECT payload FROM workflows WHERE name = %s", (name,))
+        return row["payload"] if row else None
     p = DATA_DIR / f"{name}.json"
     return json.loads(p.read_text(encoding='utf-8')) if p.exists() else None
+
 def list_workflows():
+    if USE_DB:
+        rows = _db_all("SELECT name FROM workflows ORDER BY name")
+        return [r["name"] for r in rows]
     return sorted([p.stem for p in DATA_DIR.glob("*.json")])
+
+def delete_workflow(name):
+    if USE_DB:
+        _db_exec("DELETE FROM workflows WHERE name = %s", (name,))
+        return
+    p = DATA_DIR / f"{name}.json"
+    if p.exists(): p.unlink()
 
 # ---------- Execution log ----------
 def log_execution(wf_name, source, result):
     entry = {"id": uuid.uuid4().hex[:8], "timestamp": datetime.utcnow().isoformat()+"Z",
              "source": source, "status": result.get("status"),
              "result": result.get("data"), "logs": result.get("logs", [])}
+    if USE_DB:
+        _db_exec(
+            """INSERT INTO execution_logs (workflow, source, status, result, logs)
+               VALUES (%s, %s, %s, %s::jsonb, %s::jsonb)""",
+            (wf_name, source, result.get("status"),
+             json.dumps(result.get("data")) if result.get("data") is not None else None,
+             json.dumps(result.get("logs", [])))
+        )
+        return entry
     with (LOG_DIR / f"{wf_name}.jsonl").open("a", encoding='utf-8') as f:
         f.write(json.dumps(entry)+"\n")
     return entry
+
 def read_execution_log(wf_name, limit=50):
+    if USE_DB:
+        rows = _db_all(
+            """SELECT id, created_at AS timestamp, source, status, result, logs
+               FROM execution_logs WHERE workflow = %s
+               ORDER BY created_at DESC LIMIT %s""",
+            (wf_name, limit)
+        )
+        for r in rows:
+            ts = r.get("timestamp")
+            r["timestamp"] = ts.isoformat() + "Z" if ts else None
+            r["id"] = str(r["id"])[:8]
+        return rows
     p = LOG_DIR / f"{wf_name}.jsonl"
     if not p.exists(): return []
     lines = [l for l in p.read_text(encoding='utf-8').split("\n") if l.strip()]
@@ -262,10 +495,37 @@ def read_execution_log(wf_name, limit=50):
 
 # ---------- Credentials ----------
 def load_creds(service):
+    if USE_DB:
+        row = _db_one("SELECT payload FROM credentials WHERE service = %s", (service,))
+        return row["payload"] if row else None
     p = CREDS_DIR / f"{service}.json"
     return json.loads(p.read_text(encoding='utf-8')) if p.exists() else None
+
 def save_creds(service, creds):
+    if USE_DB:
+        _db_exec(
+            """INSERT INTO credentials (service, payload, updated_at)
+               VALUES (%s, %s::jsonb, NOW())
+               ON CONFLICT (service) DO UPDATE SET
+                 payload = EXCLUDED.payload,
+                 updated_at = NOW()""",
+            (service, json.dumps(creds))
+        )
+        return
     (CREDS_DIR / f"{service}.json").write_text(json.dumps(creds, indent=2), encoding='utf-8')
+
+def list_configured_creds():
+    if USE_DB:
+        rows = _db_all("SELECT service FROM credentials ORDER BY service")
+        return [r["service"] for r in rows]
+    return [p.stem for p in CREDS_DIR.glob("*.json")]
+
+def delete_creds(service):
+    if USE_DB:
+        _db_exec("DELETE FROM credentials WHERE service = %s", (service,))
+        return
+    p = CREDS_DIR / f"{service}.json"
+    if p.exists(): p.unlink()
 
 # ---------- Helper ----------
 def extract_number(s):
@@ -1030,8 +1290,7 @@ def wf_by_name(name):
         wf = request.json
         if not wf or 'nodes' not in wf: return jsonify({"error":"invalid"}), 400
         save_workflow(name, wf); return jsonify({"status":"saved","name":name})
-    p = DATA_DIR / f"{name}.json"
-    if p.exists(): p.unlink()
+    delete_workflow(name)
     return jsonify({"status":"deleted"})
 
 @app.route('/webhook/<name>', methods=['POST','GET','OPTIONS'])
@@ -1090,7 +1349,7 @@ def get_executions(name):
 # ---------- Credentials API ----------
 @app.route('/credentials', methods=['GET'])
 def list_creds():
-    return jsonify({"configured": [p.stem for p in CREDS_DIR.glob("*.json")]})
+    return jsonify({"configured": list_configured_creds()})
 
 @app.route('/credentials/<service>', methods=['GET','PUT','DELETE'])
 def creds_service(service):
@@ -1100,8 +1359,7 @@ def creds_service(service):
     if request.method == 'PUT':
         save_creds(service, request.json or {})
         return jsonify({"status":"saved","service":service})
-    p = CREDS_DIR / f"{service}.json"
-    if p.exists(): p.unlink()
+    delete_creds(service)
     return jsonify({"status":"deleted"})
 
 
@@ -1402,6 +1660,16 @@ def ai_memory_recent():
 
 @app.route('/ai-memory/stats', methods=['GET'])
 def ai_memory_stats():
+    if USE_DB:
+        row = _db_one("SELECT COUNT(*) AS n FROM memory_messages") or {}
+        total = row.get("n", 0)
+        sessions = _db_one("SELECT COUNT(DISTINCT session_id) AS n FROM memory_messages") or {}
+        return jsonify({
+            "total_messages": total,
+            "sessions": sessions.get("n", 0),
+            "facts": memory_load_facts(),
+            "backend": "postgres"
+        })
     total = 0
     for p in SESSIONS_DIR.glob("*.jsonl"):
         total += len(p.read_text(encoding="utf-8").splitlines())
@@ -1409,27 +1677,33 @@ def ai_memory_stats():
         "total_messages": total,
         "sessions": len(list(SESSIONS_DIR.glob("*.jsonl"))),
         "facts": memory_load_facts(),
+        "backend": "filesystem",
         "memory_dir": str(MEMORY_DIR.absolute())
     })
 
 @app.route('/ai-memory/clear', methods=['POST'])
 def ai_memory_clear():
     days = int(request.json.get('days', 0) if request.json else 0)
+    if USE_DB:
+        if days == 0:
+            _db_exec("DELETE FROM memory_messages")
+            _db_exec("DELETE FROM memory_facts")
+            return jsonify({"ok": True, "message": "All memory cleared"})
+        _db_exec("DELETE FROM memory_messages WHERE created_at < NOW() - INTERVAL '%s days'" % int(days))
+        return jsonify({"ok": True, "message": f"Memory older than {days} days cleared"})
     if days == 0:
-        # Clear all
         for p in SESSIONS_DIR.glob("*.jsonl"):
             p.unlink()
         if FACTS_FILE.exists(): FACTS_FILE.unlink()
         return jsonify({"ok": True, "message": "All memory cleared"})
-    else:
-        from datetime import datetime as _dt, timedelta
-        cutoff = _dt.utcnow() - timedelta(days=days)
-        removed = 0
-        for p in SESSIONS_DIR.glob("*.jsonl"):
-            if p.stat().st_mtime < cutoff.timestamp():
-                p.unlink()
-                removed += 1
-        return jsonify({"ok": True, "removed_files": removed})
+    from datetime import datetime as _dt, timedelta
+    cutoff = _dt.utcnow() - timedelta(days=days)
+    removed = 0
+    for p in SESSIONS_DIR.glob("*.jsonl"):
+        if p.stat().st_mtime < cutoff.timestamp():
+            p.unlink()
+            removed += 1
+    return jsonify({"ok": True, "removed_files": removed})
 
 if __name__ == '__main__':
     print("\n=======================================")
@@ -1439,4 +1713,4 @@ if __name__ == '__main__':
     print("Schedule:  POST /schedule/<name>")
     print("Credentials: PUT /credentials/<service>")
     print("=======================================\n")
-app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
+    app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
