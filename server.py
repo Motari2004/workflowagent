@@ -1676,7 +1676,8 @@ def ai_chat():
         "                       data.lang is the language, usually \"javascript\".\n"
         "  tool/integration   data: {service: string, message: string}\n"
         "                     ← service = one of: gmail-smtp, discord, slack, telegram,\n"
-        "                       notion, google-sheets, twilio-sms, webhook, http-custom.\n"
+        "                       notion, google-sheets, twilio-sms, webhook, http-custom,\n"
+        "                       buffer, zernio.\n"
         "                       message = \"\" (empty — auto-inherits previous output).\n"
         "  output/console     data: {}                             (no keys)\n\n"
 
@@ -1772,6 +1773,26 @@ def ai_chat():
         "If the user asks for Bitcoin price, ALWAYS use CoinGecko:\n"
         "  https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd\n\n"
 
+
+        "### SOCIAL POSTING TOOLS\n"
+        "If the user says 'post to Facebook' or 'post to Zernio' or 'post to social media':\n"
+        "  → Use tool/integration with service='zernio'. Zernio handles Facebook, LinkedIn,\n"
+        "    Instagram, and other social platforms via a single API.\n"
+        "  → The workflow needs a source for the content first (HTTP fetch, Code node that\n"
+        "    generates/selects text, or research via /api/remote_chat).\n"
+        "  → Set message=\"\" so the previous node's output becomes the post body.\n\n"
+        "If the user says 'post to Buffer':\n"
+        "  → Use tool/integration with service='buffer'. Buffer also posts to social platforms.\n\n"
+        "These ARE valid tools. Do NOT say 'I don't have Facebook / Zernio / Buffer integration'.\n"
+        "They are in TOOL_HANDLERS and the backend will execute them.\n\n"
+
+        "RULES FOR TOOL NODES:\n"
+        "  - If the user asks for a tool that exists in the list above, USE IT. Do NOT refuse.\n"
+        "  - Do NOT say 'I do not have X integration' for any tool in the list.\n"
+        "  - zernio IS a valid tool. buffer IS a valid tool.\n"
+        "  - If the user says 'post to Facebook', use service='zernio' (Zernio posts to Facebook).\n"
+        "  - If you are unsure about credentials, still build the workflow — the user\n"
+        "    configures credentials in the Credentials panel separately.\n\n"
 
         "### TOOLS\n"
         "tool/integration message field MUST be empty string \"\" — the tool node\n"

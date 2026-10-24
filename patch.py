@@ -1,160 +1,123 @@
 import os, shutil, sys, re
 
-HTML = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\public\index.html'
+SERVER = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\server.py'
 
-if not os.path.exists(HTML):
+if not os.path.exists(SERVER):
     print("ERROR: not found"); sys.exit(1)
 
-shutil.copy(HTML, HTML + '.backup_ai_nudge')
+shutil.copy(SERVER, SERVER + '.backup_zernio_prompt')
 print("Backed up\n")
 
-with open(HTML, 'r', encoding='utf-8') as f:
-    html = f.read()
+with open(SERVER, 'r', encoding='utf-8') as f:
+    code = f.read()
 
-print("File: {} chars".format(len(html)))
+print("File: {} chars".format(len(code)))
 changes = 0
 
 # ═══════════════════════════════════════════════════════════════
-# Replace the collapsed header rules with vertical-centering-safe versions
+# 1. Update the TOOL SCHEMA line to include buffer and zernio
 # ═══════════════════════════════════════════════════════════════
-print("[1] Removing previous collapsed-header rules if any...")
+print("[1] Adding buffer + zernio to the tool schema...")
 
-# Remove the whole "#aiPanel.collapsed #aiHeader {...} ... #aiPanel.collapsed #aiHeader #aiClearBtn {...}" block
-pattern = re.compile(
-    r"\s*/\* Collapsed: header fills the panel and centers all content \*/[\s\S]*?(?=#aiPanel\.collapsed #aiBody|/\*[^*]*\*/|#aiBody)",
-    re.DOTALL
-)
-if pattern.search(html):
-    html = pattern.sub("", html, count=1)
-    print("  OK — old collapsed header rules removed")
+old_schema = '''        "  tool/integration   data: {service: string, message: string}\\n"
+        "                     ← service = one of: gmail-smtp, discord, slack, telegram,\\n"
+        "                       notion, google-sheets, twilio-sms, webhook, http-custom.\\n"
+        "                       message = \\"\\" (empty — auto-inherits previous output).\\n"'''
 
-print("\n[2] Adding refined centering rules...")
+new_schema = '''        "  tool/integration   data: {service: string, message: string}\\n"
+        "                     ← service = one of: gmail-smtp, discord, slack, telegram,\\n"
+        "                       notion, google-sheets, twilio-sms, webhook, http-custom,\\n"
+        "                       buffer, zernio.\\n"
+        "                       message = \\"\\" (empty — auto-inherits previous output).\\n"'''
 
-# Anchor: right after the #aiPanel.collapsed block
-anchor = re.compile(
-    r"(#aiPanel\.collapsed \{[\s\S]*?\}\s*)",
-    re.DOTALL
-)
-
-new_rules = '''
-
-        /* ── Collapsed AI panel: force-vertical-center everything ── */
-        #aiPanel.collapsed {
-            height: 44px;
-            min-height: 44px;
-            max-height: 44px;
-        }
-        #aiPanel.collapsed #aiHeader {
-            height: 44px;
-            min-height: 44px;
-            padding: 0 10px 0 12px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            line-height: 1;
-            overflow: hidden;
-        }
-        #aiPanel.collapsed #aiHeader .ai-title {
-            align-items: center;
-            gap: 8px;
-            line-height: 1;
-            height: 100%;
-        }
-        #aiPanel.collapsed #aiHeader .ai-title-text {
-            align-items: center;
-            line-height: 1;
-            height: 100%;
-        }
-        #aiPanel.collapsed #aiHeader .ai-title-main {
-            font-size: 12px;
-            line-height: 1;
-            display: flex;
-            align-items: center;
-            height: 100%;
-        }
-        #aiPanel.collapsed #aiHeader .ai-icon-badge {
-            width: 24px;
-            height: 24px;
-            margin: 0;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-        }
-        #aiPanel.collapsed #aiHeader .ai-icon-badge i {
-            font-size: 11px;
-            line-height: 1;
-            display: block;
-        }
-        #aiPanel.collapsed #aiHeader .ai-header-actions {
-            align-items: center;
-            height: 100%;
-            gap: 6px;
-        }
-        #aiPanel.collapsed #aiHeader #aiModelSelector {
-            height: 22px;
-            padding: 0 18px 0 6px;
-            font-size: 9px;
-            line-height: 22px;
-            background-position: right 5px center;
-        }
-        #aiPanel.collapsed #aiHeader #aiClearBtn {
-            width: 22px;
-            height: 22px;
-            padding: 0;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-        }
-        #aiPanel.collapsed #aiHeader #aiClearBtn i {
-            font-size: 10px;
-            line-height: 1;
-        }
-        /* Hide the accent bar in collapsed state to avoid it shifting padding */
-        #aiPanel.collapsed .ai-header-accent {
-            display: none;
-        }
-        #aiPanel.collapsed #aiBody,
-        #aiPanel.collapsed #aiInputRow,
-        #aiPanel.collapsed #aiQuickActions {
-            display: none !important;
-            height: 0 !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            border: 0 !important;
-        }
-'''
-
-m = anchor.search(html)
-if m:
-    # Insert after the #aiPanel.collapsed { ... } block
-    insert_pos = m.end()
-    html = html[:insert_pos] + new_rules + html[insert_pos:]
+if old_schema in code:
+    code = code.replace(old_schema, new_schema, 1)
     changes += 1
-    print("  OK — new centering rules inserted")
+    print("  OK — tool schema now lists buffer and zernio")
 else:
-    print("  FAIL — could not locate #aiPanel.collapsed block")
-    sys.exit(1)
+    print("  WARN — schema pattern not matched, trying regex")
+    pattern = re.compile(
+        r'"  tool/integration   data: \{service: string, message: string\}\\n"[\s\S]*?"                       message = \\\\"\\\\" \(empty — auto-inherits previous output\)\.\\n"',
+        re.DOTALL
+    )
+    if pattern.search(code):
+        code = pattern.sub(new_schema.strip(), code, count=1)
+        changes += 1
+        print("  OK — schema updated (regex)")
+    else:
+        print("  FAIL — could not find tool schema")
 
-with open(HTML, 'w', encoding='utf-8') as f:
-    f.write(html)
+# ═══════════════════════════════════════════════════════════════
+# 2. Add an explicit note about social posting tools
+# ═══════════════════════════════════════════════════════════════
+print("\n[2] Adding social-posting tool note to prompt...")
+
+social_note = '''        "### SOCIAL POSTING TOOLS\\n"
+        "If the user says 'post to Facebook' or 'post to Zernio' or 'post to social media':\\n"
+        "  → Use tool/integration with service='zernio'. Zernio handles Facebook, LinkedIn,\\n"
+        "    Instagram, and other social platforms via a single API.\\n"
+        "  → The workflow needs a source for the content first (HTTP fetch, Code node that\\n"
+        "    generates/selects text, or research via /api/remote_chat).\\n"
+        "  → Set message=\\"\\" so the previous node's output becomes the post body.\\n\\n"
+        "If the user says 'post to Buffer':\\n"
+        "  → Use tool/integration with service='buffer'. Buffer also posts to social platforms.\\n\\n"
+        "These ARE valid tools. Do NOT say 'I don't have Facebook / Zernio / Buffer integration'.\\n"
+        "They are in TOOL_HANDLERS and the backend will execute them.\\n\\n"
+
+        "### TOOLS\\n"'''
+
+old_tools_marker = '''        "### TOOLS\\n"'''
+
+if '### SOCIAL POSTING TOOLS' not in code:
+    if old_tools_marker in code:
+        code = code.replace(old_tools_marker, social_note, 1)
+        changes += 1
+        print("  OK — social posting note added before ### TOOLS")
+    else:
+        print("  WARN — could not find '### TOOLS' marker")
+
+# ═══════════════════════════════════════════════════════════════
+# 3. Fix the rule that makes the AI think only listed services exist
+# ═══════════════════════════════════════════════════════════════
+print("\n[3] Adding explicit 'do not refuse social tools' rule...")
+
+refuse_rule = '''        "RULES FOR TOOL NODES:\\n"
+        "  - If the user asks for a tool that exists in the list above, USE IT. Do NOT refuse.\\n"
+        "  - Do NOT say 'I do not have X integration' for any tool in the list.\\n"
+        "  - zernio IS a valid tool. buffer IS a valid tool.\\n"
+        "  - If the user says 'post to Facebook', use service='zernio' (Zernio posts to Facebook).\\n"
+        "  - If you are unsure about credentials, still build the workflow — the user\\n"
+        "    configures credentials in the Credentials panel separately.\\n\\n"
+
+        "### TOOLS\\n"'''
+
+if 'RULES FOR TOOL NODES' not in code:
+    if old_tools_marker in code:
+        code = code.replace(old_tools_marker, refuse_rule, 1)
+        changes += 1
+        print("  OK — 'do not refuse' rule added")
+    else:
+        print("  WARN — could not find '### TOOLS' marker")
+
+with open(SERVER, 'w', encoding='utf-8') as f:
+    f.write(code)
 
 # ═══════════════════════════════════════════════════════════════
 # Verify
 # ═══════════════════════════════════════════════════════════════
-print("\n[3] Verifying...")
+print("\n[4] Verifying...")
 
-final = open(HTML, 'r', encoding='utf-8').read()
+final = open(SERVER, 'r', encoding='utf-8').read()
 
 checks = [
-    ("44px collapsed height",         'height: 44px;\n            min-height: 44px;\n            max-height: 44px;' in final),
-    ("header align-items center",     '#aiPanel.collapsed #aiHeader {' in final and 'align-items: center' in final),
-    ("header line-height 1",          'line-height: 1;' in final),
-    ("title height 100%",             '.ai-title-main {\n            font-size: 12px;\n            line-height: 1;\n            display: flex;\n            align-items: center;\n            height: 100%;' in final),
-    ("icon badge 24x24",              '#aiPanel.collapsed #aiHeader .ai-icon-badge {\n            width: 24px;' in final),
-    ("selector height 22px",          '#aiPanel.collapsed #aiHeader #aiModelSelector {\n            height: 22px;' in final),
-    ("accent bar hidden",             '#aiPanel.collapsed .ai-header-accent {\n            display: none;' in final),
-    ("body hidden with important",    'display: none !important;' in final),
+    ("schema lists buffer",           "buffer, zernio." in final),
+    ("schema lists zernio",           "zernio" in final),
+    ("social posting section exists", "### SOCIAL POSTING TOOLS" in final),
+    ("zernio → Facebook mapping",     "Zernio handles Facebook" in final),
+    ("do not refuse rule",            "RULES FOR TOOL NODES" in final),
+    ("no hallucinated refusal",       "Do NOT say 'I do not have X integration'" in final),
+    ("TOOL_HANDLERS has zernio",      "'zernio':          tool_zernio," in final),
+    ("tool_zernio defined",           "def tool_zernio(" in final),
 ]
 
 all_ok = True
@@ -169,9 +132,9 @@ if all_ok:
     print("PATCH COMPLETE")
     print("=" * 55)
     print("\nNext:")
-    print("  git add public/index.html")
-    print("  git commit -m 'AI panel: vertically center collapsed header content'")
+    print("  git add server.py")
+    print("  git commit -m 'AI prompt: include buffer and zernio in tool list'")
     print("  git push origin main")
 else:
     print("Review FAIL lines above")
-    print("Backup: index.html.backup_ai_nudge")
+    print("Backup: server.py.backup_zernio_prompt")
