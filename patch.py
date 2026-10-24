@@ -1,175 +1,103 @@
-import os, shutil, sys
+import os, shutil, sys, re
 
 HTML = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\public\index.html'
 
 if not os.path.exists(HTML):
-    print("ERROR: index.html not found")
-    sys.exit(1)
+    print("ERROR: not found"); sys.exit(1)
 
-backup = HTML + '.backup_biggericons'
-shutil.copy(HTML, backup)
-print(f"Backed up to {backup}\n")
+shutil.copy(HTML, HTML + '.backup_ollama_revert')
+print("Backed up\n")
 
 with open(HTML, 'r', encoding='utf-8') as f:
     original = f.read()
 
-print(f"File: {len(original)} chars")
+print("File: {} chars".format(len(original)))
 changes = 0
 
 # ═══════════════════════════════════════════════════════════════
-# 1. Increase .tool-icon container size: 28px -> 36px
+# 1. Revert TOOLS entry: custom-ollama -> fa-brain
 # ═══════════════════════════════════════════════════════════════
-print("\n[1] Increasing .tool-icon container (28px -> 36px)...")
+print("\n[1] Reverting Ollama TOOLS entry...")
 
-old_css = '''.tool-icon {
-            width: 28px;
-            height: 28px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 6px;
-            background: rgba(148, 163, 184, 0.06);
-            border: 1px solid rgba(148, 163, 184, 0.08);
-            flex-shrink: 0;
-            transition: all 0.15s ease;
-        }'''
+# Match whatever the current entry looks like
+ollama_pattern = re.compile(r"'ollama':\s*\{[^}]*\},")
+new_entry = "'ollama':          { label:\"Ollama Cloud\",      icon:\"fa-brain\",           brand:false, color:\"#7C3AED\", creds:[\"api_key\",\"host\",\"model\"] },"
 
-new_css = '''.tool-icon {
-            width: 36px;
-            height: 36px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 8px;
-            background: rgba(148, 163, 184, 0.06);
-            border: 1px solid rgba(148, 163, 184, 0.08);
-            flex-shrink: 0;
-            transition: all 0.15s ease;
-        }'''
-
-if old_css in original:
-    original = original.replace(old_css, new_css, 1)
+if ollama_pattern.search(original):
+    original = ollama_pattern.sub(new_entry, original, count=1)
     changes += 1
-    print("  OK - .tool-icon 28x28 -> 36x36")
+    print("  OK — Ollama entry restored to fa-brain, purple color")
 else:
-    print("  SKIP - .tool-icon block not matched (may already be modified)")
+    print("  FAIL — Ollama entry not found")
 
-# Also increase the icon font size inside .tool-icon for FA icons
-old_fa = '''.tool-icon i {
-            font-size: 14px;
-            color: var(--tool-color, #94a3b8);
-            opacity: 0.9;
-            transition: opacity 0.15s ease;
-        }'''
+# ═══════════════════════════════════════════════════════════════
+# 2. Remove the custom-ollama SVG branch from getToolIconHtml
+# ═══════════════════════════════════════════════════════════════
+print("\n[2] Removing custom-ollama SVG branch...")
 
-new_fa = '''.tool-icon i {
-            font-size: 18px;
-            color: var(--tool-color, #94a3b8);
-            opacity: 0.9;
-            transition: opacity 0.15s ease;
-        }'''
+ollama_svg_pattern = re.compile(
+    r"\s*// Custom Ollama brand mark[^\n]*\n\s*if \(tool\.icon === 'custom-ollama'\) \{[\s\S]*?\n    \}\n",
+    re.DOTALL
+)
 
-if old_fa in original:
-    original = original.replace(old_fa, new_fa, 1)
+if ollama_svg_pattern.search(original):
+    original = ollama_svg_pattern.sub("", original, count=1)
     changes += 1
-    print("  OK - .tool-icon i 14px -> 18px")
+    print("  OK — custom-ollama SVG branch removed")
 else:
-    print("  SKIP - .tool-icon i block not matched")
+    print("  SKIP — no custom-ollama SVG branch found (already clean)")
 
 # ═══════════════════════════════════════════════════════════════
-# 2. Increase SVG size in credentials panel: 14 -> 20
+# 3. Fix any double commas (safety net)
 # ═══════════════════════════════════════════════════════════════
-print("\n[2] Increasing credentials panel SVG size (14 -> 20)...")
+print("\n[3] Fixing double commas...")
 
-# The credentials list calls: getToolIconHtml(key, 14)
-old_call = '${getToolIconHtml(key, 14)}'
-new_call = '${getToolIconHtml(key, 20)}'
-
-count = original.count(old_call)
-if count > 0:
-    original = original.replace(old_call, new_call)
-    changes += count
-    print(f"  OK - bumped {count} call(s) from 14 to 20")
+double_comma_count = original.count('},,')
+if double_comma_count > 0:
+    original = original.replace('},,', '},')
+    changes += double_comma_count
+    print("  OK — fixed {} double comma(s)".format(double_comma_count))
 else:
-    print("  SKIP - no '${getToolIconHtml(key, 14)}' calls found")
+    print("  OK — no double commas")
 
 # ═══════════════════════════════════════════════════════════════
-# 3. Increase edit credentials modal header icon: 16 -> 22
+# 4. Verify
 # ═══════════════════════════════════════════════════════════════
-print("\n[3] Increasing edit modal header icon (16 -> 22)...")
-
-old_modal = '${getToolIconHtml(service, 16)}'
-new_modal = '${getToolIconHtml(service, 22)}'
-
-count = original.count(old_modal)
-if count > 0:
-    original = original.replace(old_modal, new_modal)
-    changes += count
-    print(f"  OK - bumped {count} modal call(s) from 16 to 22")
-else:
-    print("  SKIP - no '${getToolIconHtml(service, 16)}' calls found")
-
-# ═══════════════════════════════════════════════════════════════
-# 4. Also bump the tool label size for better proportion
-# ═══════════════════════════════════════════════════════════════
-print("\n[4] Increasing tool label size for balance...")
-
-# In credentials panel, the label is 'text-xs' (12px). Bump to text-sm (14px).
-old_label = '<span class="text-xs font-bold text-slate-200 flex-1">${tool.label}</span>'
-new_label = '<span class="text-sm font-bold text-slate-200 flex-1">${tool.label}</span>'
-
-if old_label in original:
-    original = original.replace(old_label, new_label, 1)
-    changes += 1
-    print("  OK - label text-xs -> text-sm (12px -> 14px)")
-else:
-    print("  SKIP - label pattern not matched")
-
-# ═══════════════════════════════════════════════════════════════
-# Verify
-# ═══════════════════════════════════════════════════════════════
-print("\n[5] Verifying...")
-
-# Size sanity
-size_diff = len(original) - len(backup) if os.path.exists(backup) else 0
-if abs(size_diff) > 5000:
-    print(f"  ERROR: suspicious size change ({size_diff} chars)")
-    print("  Aborting")
-    sys.exit(1)
+print("\n[4] Verifying...")
 
 checks = [
-    ("tool-icon is 36px",        'width: 36px;\n            height: 36px' in original),
-    ("tool-icon i is 18px",       'font-size: 18px;' in original),
-    ("credentials icon 20px",     '${getToolIconHtml(key, 20)}' in original),
-    ("modal icon 22px",            '${getToolIconHtml(service, 22)}' in original),
-    ("label text-sm",              'text-sm font-bold text-slate-200' in original),
-    ("getToolIconHtml intact",     'function getToolIconHtml' in original),
-    ("custom-gmail-envelope",      'custom-gmail-envelope' in original),
-    ("custom-zernio",              'custom-zernio' in original),
-    ("TOOLS object intact",        'const TOOLS = {' in original),
+    ("Ollama uses fa-brain",          'icon:"fa-brain"' in original),
+    ("Ollama color is #7C3AED",       '#7C3AED' in original),
+    ("No custom-ollama in SVG",       "tool.icon === 'custom-ollama'" not in original),
+    ("No double commas",              '},,' not in original),
+    ("OpenAI still custom-openai",    'icon:"custom-openai"' in original),
+    ("RSS still custom-rss",          'icon:"custom-rss"' in original),
+    ("Twilio still custom-twilio",    'icon:"custom-twilio"' in original),
+    ("Gmail still custom-gmail-envelope", 'icon:"custom-gmail-envelope"' in original),
+    ("getToolIconHtml intact",        'function getToolIconHtml' in original),
+    ("TOOLS object intact",           'const TOOLS = {' in original),
 ]
 
 all_ok = True
 for name, ok in checks:
-    print(f"  [{'OK  ' if ok else 'FAIL'}] {name}")
+    print("  [{}] {}".format("OK  " if ok else "FAIL", name))
     if not ok:
         all_ok = False
 
 if not all_ok:
     print("\n  VERIFICATION FAILED — no changes written")
-    print(f"  Backup at {backup}")
     sys.exit(1)
 
 # ═══════════════════════════════════════════════════════════════
-# Write
+# 5. Write
 # ═══════════════════════════════════════════════════════════════
-print("\n[6] Writing...")
+print("\n[5] Writing...")
 
 with open(HTML, 'w', encoding='utf-8') as f:
     f.write(original)
 
-print(f"  OK - wrote {len(original)} chars")
-print(f"  {changes} change(s) applied")
+print("  OK — wrote {} chars".format(len(original)))
+print("  {} change(s) applied".format(changes))
 
 print("\n" + "=" * 55)
 print("PATCH COMPLETE")
@@ -177,7 +105,5 @@ print("=" * 55)
 print()
 print("Next:")
 print("  git add public/index.html")
-print("  git commit -m 'Increase tool icon sizes: 28px -> 36px containers, larger SVGs'")
+print("  git commit -m 'Revert Ollama to original fa-brain icon'")
 print("  git push origin main")
-print()
-print("Then hard-refresh: Ctrl+Shift+R")
