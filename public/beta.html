@@ -1,0 +1,3068 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workflow Pro V5 — 20 Tools</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/litegraph.js@0.7.10/css/litegraph.css">
+    <script src="https://cdn.jsdelivr.net/npm/litegraph.js@0.7.10/build/litegraph.min.js"></script>
+    <style>
+        :root { --bg-deep:#0a0f1a; --accent:#3b82f6; --success:#22c55e; --danger:#ef4444; --warning:#f59e0b; }
+        * { box-sizing: border-box; }
+        html, body { height:100%; margin:0; }
+        body { background:var(--bg-deep); color:#e2e8f0; overflow:hidden; font-family:'Inter',-apple-system,sans-serif; font-size:14px; display:flex; height:100vh; }
+        #canvasHost { flex:1; position:relative; overflow:hidden; min-width:0; min-height:0; background:#0f172a; }
+        #mycanvas { position:absolute; top:0; left:0; width:100%; height:100%; display:block; }
+        .glass { background:rgba(17,24,39,0.85); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); border:1px solid rgba(255,255,255,0.06); }
+        .node-item { transition:all 0.15s; cursor:pointer; user-select:none; }
+        .node-item:hover { background:rgba(59,130,246,0.08); border-color:var(--accent); transform:translateX(3px); }
+        .log-entry { padding:8px 12px; border-radius:6px; margin-bottom:6px; font-size:12px; line-height:1.4; border-left:3px solid transparent; animation:fadeSlide 0.2s; word-break:break-word; }
+        .log-entry.info    { background:rgba(59,130,246,0.08); border-left-color:var(--accent); color:#93c5fd; }
+        .log-entry.success { background:rgba(34,197,94,0.08);  border-left-color:var(--success); color:#86efac; }
+        .log-entry.error   { background:rgba(239,68,68,0.08);  border-left-color:var(--danger);  color:#fca5a5; }
+        .log-entry.warn    { background:rgba(245,158,11,0.08); border-left-color:var(--warning); color:#fcd34d; }
+        @keyframes fadeSlide { from{opacity:0;transform:translateY(-4px);} to{opacity:1;transform:translateY(0);} }
+        .result-card { margin-top:12px; padding:14px 16px; background:linear-gradient(135deg,rgba(34,197,94,0.12),rgba(34,197,94,0.04)); border:1px solid rgba(34,197,94,0.4); border-radius:10px; font-weight:600; color:#4ade80; }
+        
+        #runBtn { 
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            background: linear-gradient(-45deg, #3b82f6, #2563eb, #8b5cf6, #3b82f6);
+            background-size: 400% 400%;
+            animation: gradientBG 10s ease infinite;
+            border: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 0 15px rgba(59,130,246,0.3);
+            /* Ensure it fits perfectly */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: auto;
+            height: auto;
+        }
+        #runBtn:hover:not(:disabled) { 
+            transform: none; /* Removed scale and translateY to stop overflow */
+            box-shadow: 0 0 25px rgba(59,130,246,0.5);
+            filter: brightness(1.1);
+        }
+        #runBtn:active { transform: scale(0.98); }
+        #runBtn:disabled { 
+            background: #334155; 
+            box-shadow: none; 
+            opacity: 0.7; 
+            cursor: not-allowed; 
+        }
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        
+        #runBtn:disabled { opacity:0.7; cursor:not-allowed; }
+        ::-webkit-scrollbar { width:8px; }
+        ::-webkit-scrollbar-thumb { background:#334155; border-radius:4px; }
+        #toastContainer { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); z-index:10000; display:flex; flex-direction:column; gap:8px; pointer-events:none; }
+        .toast { padding:10px 20px; border-radius:8px; font-size:13px; font-weight:500; pointer-events:auto; transition:opacity 0.25s,transform 0.25s; color:white; }
+        .toast.info { background:rgba(59,130,246,0.9); }
+        .toast.success { background:rgba(34,197,94,0.9); }
+        .toast.error { background:rgba(239,68,68,0.9); }
+        .kbd { display:inline-block; padding:2px 6px; font-size:10px; font-family:monospace; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); border-radius:4px; color:#cbd5e1; }
+        .top-bar { pointer-events:none; }
+        .top-bar > * { pointer-events:auto; }
+        .sidebar-input { background:#1e293b; border:1px solid #334155; border-radius:6px; padding:6px 10px; font-size:12px; color:#e2e8f0; width:100%; outline:none; }
+        .sidebar-input:focus { border-color:#3b82f6; }
+        .sidebar-btn { padding:7px 10px; border-radius:6px; font-size:11px; font-weight:700; color:white; cursor:pointer; transition:all 0.15s; border:none; width:100%; display:flex; align-items:center; justify-content:center; gap:6px; }
+        .sidebar-btn:hover { filter:brightness(1.15); }
+        .tool-badge { display:inline-block; padding:1px 6px; font-size:9px; font-weight:700; border-radius:3px; margin-left:auto; }
+        .tool-badge.configured { background:rgba(34,197,94,0.2); color:#86efac; }
+        .tool-badge.missing    { background:rgba(239,68,68,0.2); color:#fca5a5; }
+        /* Modal */
+        .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:99999; display:flex; align-items:center; justify-content:center; }
+        .modal { background:#0f172a; border:1px solid #334155; border-radius:12px; padding:24px; width:480px; max-width:90vw; max-height:85vh; overflow-y:auto; }
+        .modal h2 { margin-top:0; font-size:18px; color:#e2e8f0; }
+        .modal label { display:block; font-size:11px; color:#94a3b8; margin:10px 0 4px; text-transform:uppercase; letter-spacing:0.05em; }
+        .modal input, .modal textarea { width:100%; background:#1e293b; border:1px solid #334155; border-radius:6px; padding:8px 10px; font-size:12px; color:#e2e8f0; font-family:monospace; outline:none; }
+        .modal input:focus, .modal textarea:focus { border-color:#3b82f6; }
+        .modal-buttons { display:flex; gap:8px; margin-top:20px; justify-content:flex-end; }
+        .modal-btn { padding:8px 18px; border-radius:6px; font-size:12px; font-weight:700; cursor:pointer; border:none; }
+        .modal-btn.primary { background:#3b82f6; color:white; }
+        .modal-btn.secondary { background:#334155; color:#cbd5e1; }
+    
+        /* Professional sidebar button system */
+        .pro-btn {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0 12px;
+            height: 34px;
+            width: 100%;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            letter-spacing: 0.01em;
+            color: #cbd5e1;
+            background: transparent;
+            border: 1px solid transparent;
+            cursor: pointer;
+            transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+            text-align: left;
+        }
+        .pro-btn:hover {
+            background: rgba(148, 163, 184, 0.08);
+            color: #f1f5f9;
+        }
+        .pro-btn:active {
+            background: rgba(148, 163, 184, 0.14);
+        }
+        .pro-btn i {
+            font-size: 12px;
+            color: #64748b;
+            width: 14px;
+            text-align: center;
+            transition: color 0.12s ease;
+        }
+        .pro-btn:hover i {
+            color: #94a3b8;
+        }
+        .pro-btn .shortcut {
+            margin-left: auto;
+            font-size: 10px;
+            color: #475569;
+            font-family: ui-monospace, monospace;
+        }
+
+        /* Primary action — subtle accent, no glow */
+        .pro-btn.primary {
+            background: #2563eb;
+            color: white;
+            border-color: #2563eb;
+        }
+        .pro-btn.primary:hover {
+            background: #1d4ed8;
+            border-color: #1d4ed8;
+        }
+        .pro-btn.primary i {
+            color: #bfdbfe;
+        }
+
+        /* Danger — neutral until hover */
+        .pro-btn.danger {
+            color: #94a3b8;
+        }
+        .pro-btn.danger i {
+            color: #64748b;
+        }
+        .pro-btn.danger:hover {
+            background: rgba(239, 68, 68, 0.08);
+            color: #fca5a5;
+        }
+        .pro-btn.danger:hover i {
+            color: #f87171;
+        }
+
+        /* Section label */
+        .pro-label {
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #475569;
+            padding: 0 12px;
+            margin: 16px 0 6px;
+        }
+
+        /* Sidebar container tighter */
+        .pro-sidebar-section {
+            padding: 0 12px 12px;
+        }
+
+        /* Workflow input — professional */
+        .pro-input {
+            width: 100%;
+            height: 32px;
+            padding: 0 10px;
+            background: #0f172a;
+            border: 1px solid #1e293b;
+            border-radius: 6px;
+            color: #e2e8f0;
+            font-size: 12px;
+            font-family: ui-monospace, monospace;
+            outline: none;
+            transition: border-color 0.12s ease;
+        }
+        .pro-input::placeholder {
+            color: #475569;
+        }
+        .pro-input:focus {
+            border-color: #3b82f6;
+        }
+
+        /* Node library rows — cleaner */
+        .pro-node {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: background 0.12s ease, border-color 0.12s ease;
+        }
+        .pro-node:hover {
+            background: rgba(148, 163, 184, 0.06);
+            border-color: #1e293b;
+        }
+        .pro-node-icon {
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            background: rgba(148, 163, 184, 0.08);
+            color: #94a3b8;
+            font-size: 11px;
+        }
+        .pro-node:hover .pro-node-icon {
+            background: rgba(148, 163, 184, 0.14);
+            color: #cbd5e1;
+        }
+        .pro-node-text {
+            font-size: 12px;
+            font-weight: 500;
+            color: #cbd5e1;
+            flex: 1;
+        }
+        .pro-node:hover .pro-node-text {
+            color: #f1f5f9;
+        }
+
+    
+        /* Compact node library rows */
+        .node-item {
+            transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+            cursor: pointer;
+            user-select: none;
+            padding: 6px 8px !important;
+            border-radius: 6px !important;
+        }
+        .node-item:hover {
+            background: rgba(59,130,246,0.06);
+            border-color: #3b82f6;
+            transform: translateX(2px);
+        }
+        .node-item:active { transform: translateX(1px); }
+        .node-item .w-7,
+        .node-item .w-8 { width: 22px !important; height: 22px !important; }
+        .node-item .w-7 i,
+        .node-item .w-8 i { font-size: 10px !important; }
+        .node-item .flex-1 > div:first-child {
+            font-size: 11px !important;
+            line-height: 1.2;
+        }
+        .node-item .flex-1 > div:last-child {
+            font-size: 9px !important;
+            line-height: 1.1;
+            margin-top: 1px;
+        }
+
+    
+        /* ---- AI Chat Panel ---- */
+        #aiPanel {
+            position: fixed !important;
+            bottom: 16px !important;
+            right: 16px !important;
+            left: auto !important;
+            top: auto !important;
+            width: 340px;
+            height: 429px;
+            z-index: 9997;
+            background: #0f172a;
+            border: 1px solid #1e293b;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+            overflow: hidden;
+            transition: height 0.2s, width 0.2s;
+            font-family: 'Inter', -apple-system, sans-serif;
+        }
+        #aiPanel.collapsed {
+            height: 40px;
+        }
+        #aiHeader {
+            padding: 8px 14px;
+            background: linear-gradient(135deg, #1e293b, #0f172a);
+            border-bottom: 1px solid #1e293b;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        #aiHeader .ai-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #e2e8f0;
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        #aiHeader .ai-title i {
+            color: #3b82f6;
+        }
+        #aiHeader .ai-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #22c55e;
+            box-shadow: 0 0 6px #22c55e;
+            animation: pulse 2s infinite;
+        }
+        #aiHeader button {
+            background: transparent;
+            border: none;
+            color: #64748b;
+            cursor: pointer;
+            padding: 4px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            transition: color 0.15s, background 0.15s;
+        }
+        #aiHeader button:hover {
+            color: #f1f5f9;
+            background: rgba(148, 163, 184, 0.1);
+        }
+        #aiBody {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            scroll-behavior: smooth;
+        }
+        #aiPanel.collapsed #aiBody,
+        #aiPanel.collapsed #aiInputRow,
+        #aiPanel.collapsed #aiQuickActions {
+            display: none;
+        }
+        .ai-msg {
+            font-size: 12px;
+            line-height: 1.5;
+            padding: 10px 12px;
+            border-radius: 8px;
+            word-wrap: break-word;
+            white-space: pre-wrap;
+            animation: aiFadeIn 0.2s ease;
+        }
+        .ai-msg.user {
+            background: #1e40af;
+            color: #dbeafe;
+            align-self: flex-end;
+            max-width: 85%;
+            border-bottom-right-radius: 2px;
+        }
+        .ai-msg.bot {
+            background: #1e293b;
+            color: #e2e8f0;
+            align-self: flex-start;
+            max-width: 95%;
+            border-bottom-left-radius: 2px;
+            border: 1px solid #334155;
+        }
+        .ai-msg.bot code {
+            background: #0f172a;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-family: ui-monospace, monospace;
+            font-size: 12px;
+            color: #93c5fd;
+        }
+        .ai-msg.bot pre {
+            background: #0f172a;
+            padding: 8px 10px;
+            border-radius: 5px;
+            margin: 6px 0;
+            overflow-x: auto;
+            font-family: ui-monospace, monospace;
+            font-size: 11px;
+            color: #93c5fd;
+            border: 1px solid #334155;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .ai-msg.bot strong {
+            color: #f1f5f9;
+        }
+        .ai-msg.bot a {
+            color: #60a5fa;
+            text-decoration: underline;
+        }
+        .ai-thinking {
+            align-self: flex-start;
+            color: #64748b;
+            font-size: 12px;
+            font-style: italic;
+            padding: 8px 12px;
+        }
+        .ai-thinking::after {
+            content: '';
+            display: inline-block;
+            animation: dots 1.4s infinite;
+        }
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+        @keyframes aiFadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        #aiQuickActions {
+            padding: 6px 10px;
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            border-top: 1px solid #1e293b;
+            background: #0a0f1a;
+            flex-shrink: 0;
+        }
+        .ai-quick-btn {
+            padding: 4px 8px;
+            border-radius: 5px;
+            background: #1e293b;
+            color: #94a3b8;
+            font-size: 10px;
+            border: 1px solid #334155;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .ai-quick-btn:hover {
+            background: #334155;
+            color: #e2e8f0;
+            border-color: #3b82f6;
+        }
+        #aiInputRow {
+            padding: 8px 10px;
+            display: flex;
+            gap: 8px;
+            border-top: 1px solid #1e293b;
+            background: #0a0f1a;
+            flex-shrink: 0;
+        }
+        #aiInput {
+            flex: 1;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            padding: 8px 10px;
+            color: #e2e8f0;
+            font-size: 13px;
+            font-family: 'Inter', sans-serif;
+            outline: none;
+            resize: none;
+            min-height: 32px;
+            max-height: 80px;
+            line-height: 1.4;
+        }
+        #aiInput:focus {
+            border-color: #3b82f6;
+        }
+        #aiSendBtn {
+            padding: 8px 14px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        #aiSendBtn:hover:not(:disabled) {
+            background: #2563eb;
+        }
+        #aiSendBtn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+    
+        /* Tool credential icon — clean, no colored blur */
+        .tool-icon {
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            background: rgba(148, 163, 184, 0.06);
+            border: 1px solid rgba(148, 163, 184, 0.08);
+            flex-shrink: 0;
+            transition: all 0.15s ease;
+        }
+        .tool-icon i {
+            font-size: 14px;
+            color: var(--tool-color, #94a3b8);
+            opacity: 0.9;
+            transition: opacity 0.15s ease;
+        }
+        .tool-icon:hover {
+            background: rgba(148, 163, 184, 0.12);
+            border-color: rgba(148, 163, 184, 0.18);
+        }
+        .tool-icon:hover i {
+            opacity: 1;
+        }
+
+    
+        /* AI Model Selector */
+        #aiModelSelector {
+            appearance: none;
+            -webkit-appearance: none;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            padding: 3px 20px 3px 8px;
+            font-size: 10px;
+            color: #94a3b8;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-family: 'Inter', sans-serif;
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='6' height='4' viewBox='0 0 6 4'%3e%3cpath fill='%2364748b' d='M0 0l3 4 3-4z'/%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 6px center;
+            background-size: 6px;
+        }
+        #aiModelSelector:hover {
+            border-color: #3b82f6;
+            color: #e2e8f0;
+        }
+        #aiModelSelector:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+        #aiModelSelector option {
+            background: #0f172a;
+            color: #e2e8f0;
+            padding: 4px;
+        }
+        #aiModelSelector option:disabled {
+            color: #475569;
+        }
+
+    
+        /* AI Code Block with Copy Button */
+        .ai-code-block {
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            margin: 8px 0;
+            overflow: hidden;
+            font-family: ui-monospace, monospace;
+        }
+        .ai-code-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 10px;
+            background: rgba(30, 41, 59, 0.6);
+            border-bottom: 1px solid #334155;
+        }
+        .ai-code-lang {
+            font-size: 10px;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 600;
+        }
+        .ai-copy-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            background: transparent;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            color: #94a3b8;
+            font-size: 10px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-family: 'Inter', sans-serif;
+        }
+        .ai-copy-btn:hover {
+            background: rgba(59, 130, 246, 0.1);
+            border-color: #3b82f6;
+            color: #60a5fa;
+        }
+        .ai-copy-btn:active {
+            background: rgba(59, 130, 246, 0.2);
+        }
+        .ai-code-content {
+            padding: 10px 12px;
+            margin: 0;
+            font-size: 11px;
+            line-height: 1.5;
+            color: #93c5fd;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .ai-code-content code {
+            background: transparent;
+            padding: 0;
+            color: inherit;
+        }
+
+    
+        /* ---- Code Editor Modal ---- */
+        #codeModalOverlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(8px);
+            z-index: 100000;
+            align-items: center;
+            justify-content: center;
+        }
+        #codeModalOverlay.active {
+            display: flex;
+        }
+        #codeModal {
+            width: 90vw;
+            max-width: 1200px;
+            height: 85vh;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);
+            overflow: hidden;
+        }
+        #codeModalHeader {
+            padding: 16px 20px;
+            border-bottom: 1px solid #1e293b;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: linear-gradient(135deg, #1e293b, #0f172a);
+            flex-shrink: 0;
+        }
+        #codeModalHeader .modal-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: #e2e8f0;
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        #codeModalHeader .modal-title i {
+            color: #a855f7;
+        }
+        #codeModalLang {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            color: #cbd5e1;
+            padding: 6px 12px;
+            font-size: 12px;
+            font-family: ui-monospace, monospace;
+            cursor: pointer;
+        }
+        #codeModalLang:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+        #codeModalHeader button {
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: 1px solid transparent;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        #codeSaveBtn {
+            background: #2563eb;
+            color: white;
+            border-color: #2563eb;
+        }
+        #codeSaveBtn:hover {
+            background: #1d4ed8;
+        }
+        #codeCancelBtn {
+            background: transparent;
+            color: #94a3b8;
+            border-color: #334155;
+        }
+        #codeCancelBtn:hover {
+            background: rgba(148, 163, 184, 0.1);
+            color: #e2e8f0;
+        }
+        #codeTestBtn {
+            background: #059669;
+            color: white;
+            border-color: #059669;
+        }
+        #codeTestBtn:hover {
+            background: #047857;
+        }
+        #codeTestBtn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #codeModalBody {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+        #codeEditorHost {
+            flex: 1;
+            overflow: hidden;
+        }
+        #codeEditorHost .CodeMirror {
+            height: 100%;
+            font-size: 13px;
+            font-family: ui-monospace, 'JetBrains Mono', Consolas, monospace;
+            background: #0f172a;
+            color: #e2e8f0;
+        }
+        #codeEditorHost .CodeMirror-gutters {
+            background: #0a0f1a;
+            border-right: 1px solid #1e293b;
+        }
+        #codeEditorHost .CodeMirror-linenumber {
+            color: #475569;
+        }
+        #codeEditorHost .CodeMirror-cursor {
+            border-left: 2px solid #60a5fa;
+        }
+        #codeEditorHost .CodeMirror-selected {
+            background: rgba(59, 130, 246, 0.25) !important;
+        }
+        #codeEditorHost .CodeMirror-activeline-background {
+            background: rgba(59, 130, 246, 0.05);
+        }
+        #codeEditorHost .CodeMirror-matchingbracket {
+            color: #facc15 !important;
+            background: rgba(250, 204, 21, 0.15);
+        }
+        #codeTestOutput {
+            display: none;
+            width: 320px;
+            border-left: 1px solid #1e293b;
+            background: #0a0f1a;
+            overflow-y: auto;
+            padding: 12px;
+        }
+        #codeTestOutput.visible {
+            display: block;
+        }
+        #codeTestOutput h4 {
+            margin: 0 0 8px 0;
+            font-size: 10px;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        #codeTestOutput .result-line {
+            background: #1e293b;
+            border-left: 2px solid #22c55e;
+            padding: 8px 10px;
+            font-size: 11px;
+            font-family: monospace;
+            color: #86efac;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            word-break: break-word;
+            white-space: pre-wrap;
+        }
+        #codeTestOutput .error-line {
+            border-left-color: #ef4444;
+            color: #fca5a5;
+        }
+        #codeModalFooter {
+            padding: 10px 20px;
+            border-top: 1px solid #1e293b;
+            background: #0a0f1a;
+            font-size: 11px;
+            color: #64748b;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        #codeModalFooter kbd {
+            background: rgba(148, 163, 184, 0.1);
+            border: 1px solid #334155;
+            border-radius: 3px;
+            padding: 1px 6px;
+            font-family: monospace;
+            font-size: 10px;
+            color: #cbd5e1;
+        }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* Node value prompt — roomy OK button */
+.graphdialog {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px !important;
+  background: #0f172a !important;
+  border: 1px solid #334155 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  min-width: 220px;
+}
+.graphdialog .name {
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.graphdialog .value,
+.graphdialog input.value,
+.graphdialog textarea.value {
+  flex: 1;
+  min-width: 120px;
+  background: #1e293b !important;
+  border: 1px solid #334155 !important;
+  border-radius: 6px !important;
+  padding: 8px 10px !important;
+  color: #e2e8f0 !important;
+  font-size: 13px !important;
+  font-family: ui-monospace, monospace !important;
+  outline: none;
+}
+.graphdialog .value:focus,
+.graphdialog input.value:focus,
+.graphdialog textarea.value:focus {
+  border-color: #3b82f6 !important;
+}
+.graphdialog button,
+.graphdialog button.rounded {
+  flex-shrink: 0;
+  min-width: 52px;
+  height: 34px;
+  padding: 0 16px !important;
+  background: #2563eb !important;
+  border: none !important;
+  border-radius: 6px !important;
+  color: #fff !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.graphdialog button:hover,
+.graphdialog button.rounded:hover {
+  background: #1d4ed8 !important;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    </style>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+</head>
+<body>
+
+    <div class="top-bar fixed top-5 right-5 z-[9999] flex items-center gap-3">
+        <button id="runBtn" class="text-white px-6 py-2.5 rounded-full text-sm font-bold flex items-center gap-3 shadow-xl tracking-wide">
+            <i class="fas fa-play"></i><span id="runBtnText">EXECUTE WORKFLOW</span><span class="kbd ml-2">Ctrl+↵</span>
+        </button>
+    </div>
+
+    <aside class="w-72 glass h-full flex flex-col z-10 border-r border-slate-800">
+        <div class="p-5 border-b border-slate-800 flex items-center gap-3">
+            <div class="bg-blue-600 p-2 rounded-lg"><i class="fas fa-layer-group text-white text-sm"></i></div>
+            <h1 class="text-base font-bold">Workflow<span class="text-blue-500">Pro</span></h1>
+        </div>
+
+        <div class="flex-1 overflow-y-auto pb-2">
+            <div class="pro-label">Triggers</div>
+            <div class="pro-sidebar-section" style="display:flex;flex-direction:column;gap:2px;">
+                <div class="pro-node" onclick="addNode('trigger/webhook')">
+                    <div class="pro-node-icon"><i class="fas fa-bolt"></i></div>
+                    <div class="pro-node-text">Webhook Input</div>
+                </div>
+            </div>
+
+            <div class="pro-label">Data</div>
+            <div class="pro-sidebar-section" style="display:flex;flex-direction:column;gap:2px;">
+                <div class="pro-node" onclick="addNode('market/data')">
+                    <div class="pro-node-icon"><i class="fas fa-chart-line"></i></div>
+                    <div class="pro-node-text">Market Data</div>
+                </div>
+            </div>
+
+            <div class="pro-label">Logic</div>
+            <div class="pro-sidebar-section" style="display:flex;flex-direction:column;gap:2px;">
+                <div class="pro-node" onclick="addNode('logic/filter')">
+                    <div class="pro-node-icon"><i class="fas fa-filter"></i></div>
+                    <div class="pro-node-text">Text Filter</div>
+                </div>
+                <div class="pro-node" onclick="addNode('logic/math')">
+                    <div class="pro-node-icon"><i class="fas fa-calculator"></i></div>
+                    <div class="pro-node-text">Math</div>
+                </div>
+                <div class="pro-node" onclick="addNode('logic/compare')">
+                    <div class="pro-node-icon"><i class="fas fa-code-branch"></i></div>
+                    <div class="pro-node-text">Compare</div>
+                </div>
+                <div class="pro-node" onclick="addNode('logic/json-extract')">
+                    <div class="pro-node-icon"><i class="fas fa-code"></i></div>
+                    <div class="pro-node-text">JSON Extract</div>
+                </div>
+                <div class="pro-node" onclick="addNode('logic/code')">
+                    <div class="pro-node-icon"><i class="fas fa-code"></i></div>
+                    <div class="pro-node-text">Code</div>
+                </div>
+
+            </div>
+
+            <div class="pro-label">Outputs</div>
+            <div class="pro-sidebar-section" style="display:flex;flex-direction:column;gap:2px;">
+                <div class="pro-node" onclick="addNode('action/http')">
+                    <div class="pro-node-icon"><i class="fas fa-globe"></i></div>
+                    <div class="pro-node-text">HTTP Request</div>
+                </div>
+                <div class="pro-node" onclick="addNode('tool/integration')">
+                    <div class="pro-node-icon"><i class="fas fa-plug"></i></div>
+                    <div class="pro-node-text">Tool</div>
+                </div>
+                <div class="pro-node" onclick="addNode('output/console')">
+                    <div class="pro-node-icon"><i class="fas fa-terminal"></i></div>
+                    <div class="pro-node-text">Terminal Output</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="p-3 border-t border-slate-800" style="display:flex;flex-direction:column;gap:4px;">
+            <div class="pro-label" style="margin-top:4px; display:flex; justify-content:space-between; align-items:center;">
+                Workflow
+                <button onclick="resetWorkflowUI()" style="background:transparent; border:none; color:#3b82f6; font-size:10px; cursor:pointer; font-weight:bold;">+ New</button>
+            </div>
+            
+            <!-- Dropdown for loading existing -->
+            <select id="workflowSelector" class="pro-input" style="margin-bottom:8px; cursor:pointer; padding: 0 8px; width:100%;" onchange="handleWorkflowSelect()">
+                <option value="">-- Load saved --</option>
+            </select>
+
+            <!-- Container for input vs loaded state -->
+            <div id="workflowInputContainer" style="margin-bottom:8px;">
+                <input id="workflowName" type="text" placeholder="Name this workflow..." class="pro-input" autocomplete="off" />
+            </div>
+            <div id="workflowLoadedContainer" style="display:none; margin-bottom:8px;">
+                <div style="display:flex; align-items:center; justify-content:space-between; background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.2); padding:6px 10px; border-radius:6px; font-size:12px; color:#86efac; font-weight:500;">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <i class="fas fa-check-circle"></i>
+                        <span>Loaded: <span id="currentLoadedName"></span></span>
+                    </div>
+                    <button onclick="promptRenameWorkflow()" style="background:transparent; border:none; color:#86efac; cursor:pointer; font-size:11px; padding:2px;" title="Rename Workflow">
+                        <i class="fas fa-pen"></i>
+                    </button>
+                </div>
+            </div>
+            <button onclick="saveCurrentWorkflow()" class="pro-btn">
+                <i class="fas fa-save"></i>
+                <span>Save</span>
+                <span class="shortcut">S</span>
+            </button>
+            <button onclick="scheduleCurrentWorkflow()" class="pro-btn">
+                <i class="fas fa-clock"></i>
+                <span>Schedule</span>
+                <span class="shortcut">60s</span>
+            </button>
+            <button onclick="showWebhookUrl()" class="pro-btn">
+                <i class="fas fa-bolt"></i>
+                <span>Webhook URL</span>
+            </button>
+            <button onclick="showExecutions()" class="pro-btn">
+                <i class="fas fa-history"></i>
+                <span>Executions</span>
+            </button>
+            <button onclick="openCredentialsPanel()" class="pro-btn">
+                <i class="fas fa-key"></i>
+                <span>Credentials</span>
+            </button>
+            <div style="height:4px;"></div>
+            <button onclick="graph.clear(); canvas.setDirty(true,true); resetWorkflowUI(); toast('Canvas cleared','info');" class="pro-btn danger">
+                <i class="fas fa-trash"></i>
+                <span>Clear Canvas</span>
+            </button>
+        </div>
+    </aside>
+
+    <main id="canvasHost"><canvas id="mycanvas"></canvas></main>
+
+    <div id="logPanel" class="glass fixed top-24 right-5 z-[9998] rounded-xl shadow-2xl border border-slate-800 overflow-hidden flex flex-col" style="width:380px; max-height:60vh;">
+        <div id="logHeader" class="px-4 py-3 border-b border-slate-800 flex justify-between items-center bg-slate-900/40 cursor-pointer select-none" title="Click to collapse">
+            <div class="flex items-center gap-2 pointer-events-none">
+                <i class="fas fa-stream text-slate-500 text-xs"></i>
+                <h2 class="font-bold text-[11px] uppercase text-slate-400 tracking-wider">Live Execution Log</h2>
+            </div>
+            <div class="flex items-center gap-3">
+                <i id="logToggleIcon" class="fas fa-chevron-up text-[10px] text-slate-500"></i>
+                <button onclick="event.stopPropagation(); document.getElementById('log').innerHTML = '';" class="text-[10px] text-slate-500 hover:text-slate-300 uppercase">Clear</button>
+            </div>
+        </div>
+        <div id="log" class="p-4 overflow-y-auto font-mono text-xs" style="max-height:calc(60vh - 48px);"></div>
+    </div>
+
+    
+    <!-- AI Chat Panel -->
+    <div id="aiPanel" class="collapsed">
+        <div id="aiHeader">
+            <div class="ai-title">
+                <i class="fas fa-robot"></i>
+                <span>AI Assistant</span>
+                <span class="ai-dot"></span>
+            </div>
+                        <select id="aiModelSelector" title="Choose model">
+                <option value="gemini-flash">Gemini Flash</option>
+            </select>
+<button id="aiClearBtn" title="Clear conversation">
+                <i class="fas fa-trash-alt"></i>
+            </button>
+        </div>
+        <div id="aiBody"></div>
+        <div id="aiQuickActions">
+            <button class="ai-quick-btn" data-prompt="Explain how my workflow works">Explain workflow</button>
+            <button class="ai-quick-btn" data-prompt="Write a JavaScript Code node that parses a number from text input">JS snippet</button>
+            <button class="ai-quick-btn" data-prompt="How do I schedule a workflow to run every hour?">Schedule</button>
+            <button class="ai-quick-btn" data-prompt="What tools are available in the Tool node?">List tools</button>
+        </div>
+        <div id="aiInputRow">
+            <textarea id="aiInput" placeholder="Ask anything about workflows..." rows="1"></textarea>
+            <button id="aiSendBtn"><i class="fas fa-paper-plane"></i></button>
+        </div>
+    </div>
+
+
+    <!-- Code Editor Modal -->
+    <div id="codeModalOverlay">
+        <div id="codeModal">
+            <div id="codeModalHeader">
+                <div class="modal-title">
+                    <i class="fas fa-code"></i>
+                    <span id="codeModalTitle">Edit Code</span>
+                </div>
+                <select id="codeModalLang">
+                    <option value="javascript">JavaScript</option>
+                    <option value="python">Python</option>
+                </select>
+                <button id="codeTestBtn">Test</button>
+                <button id="codeCancelBtn">Cancel</button>
+                <button id="codeSaveBtn">Save</button>
+            </div>
+            <div id="codeModalBody">
+                <div id="codeEditorHost"></div>
+                <div id="codeTestOutput">
+                    <h4>Test Output</h4>
+                    <div id="codeTestResult"></div>
+                </div>
+            </div>
+            <div id="codeModalFooter">
+                <span>Ctrl+Enter to test • Esc to close</span>
+                <span>Changes saved when you click Save</span>
+            </div>
+        </div>
+    </div>
+
+<div id="toastContainer"></div>
+
+<script>
+console.log("=== WORKFLOW PRO V5 STARTING ===");
+
+// 20 TOOL DEFINITIONS
+const TOOLS = {
+    'discord':         { label:"Discord",         icon:"fa-discord",         brand:true,  color:"#5865F2", creds:["webhook_url"] },
+    'slack':           { label:"Slack",           icon:"fa-slack",           brand:true,  color:"#4A154B", creds:["webhook_url"] },
+    'telegram':        { label:"Telegram",        icon:"fa-telegram",        brand:true,  color:"#26A5E4", creds:["bot_token","chat_id"] },
+    'gmail-smtp':      { label:"Gmail SMTP",     icon:"fa-envelope",       brand:true,  color:"#EA4335", creds:["email","app_password","to"] },
+    'github-issue':    { label:"GitHub Issue",    icon:"fa-github",          brand:true,  color:"#e5e7eb", creds:["token","repo"] },
+    'github-comment':  { label:"GitHub Comment",  icon:"fa-github",          brand:true,  color:"#e5e7eb", creds:["token","repo"] },
+    'notion':          { label:"Notion",          icon:"fa-book",            brand:false, color:"#e5e7eb", creds:["token","database_id"] },
+    'google-sheets':   { label:"Google Sheets",   icon:"fa-google",          brand:true,  color:"#34A853", creds:["webhook_url"] },
+    'twilio-sms':      { label:"Twilio SMS",      icon:"fa-sms",             brand:false, color:"#F22F46", creds:["sid","token","from","to"] },
+    'openai':          { label:"OpenAI GPT",      icon:"fa-robot",           brand:false, color:"#10A37F", creds:["api_key"] },
+    'gemini':          { label:"Google Gemini",     icon:"fa-google",          brand:true,  color:"#4285F4", creds:["api_key"] },
+    'ollama':          { label:"Ollama Cloud",      icon:"fa-brain",           brand:false, color:"#7C3AED", creds:["api_key","host","model"] },
+    'stripe':          { label:"Stripe",          icon:"fa-stripe-s",        brand:true,  color:"#635BFF", creds:["api_key"] },
+    'weather':         { label:"Weather",         icon:"fa-cloud-sun",       brand:false, color:"#0EA5E9", creds:["city"] },
+    'coingecko':       { label:"CoinGecko",       icon:"fa-coins",           brand:false, color:"#8DC63F", creds:["coin"] },
+    'binance':         { label:"Binance",         icon:"fa-bitcoin",         brand:true,  color:"#F0B90B", creds:["symbol"] },
+    'newsapi':         { label:"NewsAPI",         icon:"fa-newspaper",       brand:false, color:"#E4572E", creds:["api_key"] },
+    'rss':             { label:"RSS Reader",      icon:"fa-rss",             brand:true,  color:"#EE802F", creds:["url"] },
+    'webhook':         { label:"Generic Webhook", icon:"fa-link",            brand:false, color:"#6366F1", creds:["url"] },
+    'http-custom':     { label:"Custom HTTP",     icon:"fa-globe",           brand:false, color:"#0EA5E9", creds:["url","method"] },
+    'pushover':        { label:"Pushover",        icon:"fa-bell",            brand:false, color:"#249DF1", creds:["app_token","user_key"] },
+    'mqtt':            { label:"MQTT (stub)",     icon:"fa-broadcast-tower", brand:false, color:"#660066", creds:[] },
+};
+
+const graph = new LGraph();
+const canvas = new LGraphCanvas("#mycanvas", graph);
+
+// === PATCH: keep node value dialogs open until click ===
+// LiteGraph 0.7.10 hardcodes close-on-mouseleave in prompt() — override it.
+// Stay open on mouse move; close on outside click / OK / Enter / Esc.
+(function() {
+  if (typeof LGraphCanvas === "undefined") {
+    console.warn("[patch] LGraphCanvas not found — skip value-dialog fix");
+    return;
+  }
+  LGraphCanvas.prototype.prompt = function(title, value, callback, event, multiline) {
+    var that = this;
+    var dialog = document.createElement("div");
+    dialog.className = "graphdialog rounded";
+    if (multiline) {
+      dialog.innerHTML = "<span class='name'></span> <textarea autofocus class='value'></textarea><button class='rounded'>OK</button>";
+    } else {
+      dialog.innerHTML = "<span class='name'></span> <input autofocus type='text' class='value'/><button class='rounded'>OK</button>";
+    }
+
+    var closed = false;
+    function cleanupOutside() {
+      document.removeEventListener("mousedown", onOutside, true);
+      document.removeEventListener("pointerdown", onOutside, true);
+    }
+    dialog.close = function() {
+      if (closed) return;
+      closed = true;
+      cleanupOutside();
+      that.prompt_box = null;
+      if (dialog.parentNode) dialog.parentNode.removeChild(dialog);
+    };
+
+    if (this.ds && this.ds.scale > 1) {
+      dialog.style.transform = "scale(" + this.ds.scale + ")";
+    }
+    // NO mouseleave — does not close when mouse moves away
+
+    if (that.prompt_box) that.prompt_box.close();
+    that.prompt_box = dialog;
+
+    var nameEl = dialog.querySelector(".name");
+    if (nameEl) nameEl.innerText = title || "";
+    var input = dialog.querySelector(".value");
+    if (input) input.value = value != null ? value : "";
+
+    function commit() {
+      if (callback && input) callback(input.value);
+      if (that.setDirty) that.setDirty(true);
+      dialog.close();
+    }
+
+    if (input) {
+      input.addEventListener("keydown", function(e) {
+        if (e.keyCode === 27) { // Esc — cancel
+          dialog.close();
+        } else if (e.keyCode === 13 && e.target.localName !== "textarea") { // Enter — save
+          commit();
+        } else {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+      });
+    }
+
+    var button = dialog.querySelector("button");
+    if (button) {
+      button.addEventListener("click", function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        commit();
+      });
+    }
+
+    // Close when clicking outside the dialog (not on mouse move)
+    function onOutside(e) {
+      if (closed) return;
+      if (dialog.contains(e.target)) return;
+      dialog.close();
+    }
+    // Delay so the same click that opened the prompt does not immediately close it
+    setTimeout(function() {
+      if (closed) return;
+      document.addEventListener("mousedown", onOutside, true);
+      document.addEventListener("pointerdown", onOutside, true);
+    }, 0);
+
+    var graphcanvas = LGraphCanvas.active_canvas;
+    var canvas = graphcanvas ? graphcanvas.canvas : null;
+    if (canvas) {
+      var rect = canvas.getBoundingClientRect();
+      var ox = -20, oy = -20;
+      if (rect) { ox -= rect.left; oy -= rect.top; }
+      if (event) {
+        dialog.style.left = (event.clientX + ox) + "px";
+        dialog.style.top  = (event.clientY + oy) + "px";
+      } else {
+        dialog.style.left = (canvas.width * 0.5 + ox) + "px";
+        dialog.style.top  = (canvas.height * 0.5 + oy) + "px";
+      }
+      if (canvas.parentNode) canvas.parentNode.appendChild(dialog);
+    } else {
+      document.body.appendChild(dialog);
+    }
+
+    if (input) {
+      input.focus();
+      if (input.select) input.select();
+    }
+    return dialog;
+  };
+  console.log("[patch] Node value dialogs: open until outside-click / OK / Enter / Esc");
+})();
+// === END PATCH: keep node value dialogs open ===
+
+
+
+canvas.allow_dragcanvas = false;
+canvas.allow_dragnodes = true;
+canvas.allow_interaction = true;
+canvas.clear_background_color = "#0f172a";
+canvas.render_background = true;
+canvas.render_pattern = true;
+
+// ============================================================
+// Disable OK button on text/number widgets — saves space, looks cleaner
+// ============================================================
+if (LiteGraph.widgets && LiteGraph.widgets.TextWidget) {
+    LiteGraph.widgets.TextWidget.prototype.showValue = function(ctx, value, x, y, w, h) {
+        ctx.save();
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = (this.options && this.options.color) || "#cbd5e1";
+        ctx.font = "11px ui-monospace, monospace";
+        ctx.fillText(String(value || ""), x + 8, y + h / 2);
+        ctx.restore();
+    };
+}
+
+if (LiteGraph.widgets && LiteGraph.widgets.NumberWidget) {
+    LiteGraph.widgets.NumberWidget.prototype.showValue = function(ctx, value, x, y, w, h) {
+        ctx.save();
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#cbd5e1";
+        ctx.font = "11px ui-monospace, monospace";
+        ctx.fillText(String(value || ""), x + w - 8, y + h / 2);
+        ctx.restore();
+    };
+}
+console.log('[widget] OK button disabled');
+
+
+function fitCanvas() {
+    const cvs = canvas.canvas, rect = cvs.getBoundingClientRect();
+    const w = Math.max(1, Math.round(rect.width)), h = Math.max(1, Math.round(rect.height));
+    if (cvs.width !== w || cvs.height !== h) {
+        cvs.width = w; cvs.height = h;
+        canvas.setDirty(true, true); canvas.draw(true);
+    }
+}
+requestAnimationFrame(fitCanvas); setTimeout(fitCanvas, 100); setTimeout(fitCanvas, 500);
+window.addEventListener('resize', () => { fitCanvas(); setTimeout(fitCanvas, 100); });
+setInterval(fitCanvas, 750);
+
+canvas.getNodeOnPos = function(x,y,list,margin) {
+    const nodes = list || this.graph._nodes; margin = margin || 0;
+    for (let i = nodes.length-1; i >= 0; i--) {
+        const n = nodes[i]; if (!n) continue;
+        const s = n.size;
+        if (x>=n.pos[0]-margin && y>=n.pos[1]-margin && x<=n.pos[0]+s[0]+margin && y<=n.pos[1]+s[1]+margin) return n;
+    }
+    return null;
+};
+
+const _origDown = canvas.processMouseDown.bind(canvas);
+canvas.processMouseDown = function(e) {
+    const hit = this.getNodeOnPos(e.canvasX, e.canvasY, this.graph._nodes);
+    if (hit && !this.read_only) {
+        this.selected_nodes = {}; this.selected_nodes[hit.id] = hit; hit.is_selected = true;
+    }
+    const r = _origDown(e);
+    if (hit && !this.read_only) setTimeout(() => {
+        try {
+            const idx = this.graph._nodes.indexOf(hit);
+            if (idx !== -1 && idx !== this.graph._nodes.length-1) {
+                this.graph._nodes.splice(idx, 1); this.graph._nodes.push(hit);
+            }
+            this.setDirty(true, true);
+        } catch(_) {}
+    }, 0);
+    return r;
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+const NODE_THEME = {
+    source: {
+        titleBar: "#1e293b", // Slate 800
+        body: "#0f172a",     // Slate 900
+        accent: "#3b82f6",   // Blue 500
+        text: "#f1f5f9"      // Slate 100
+    },
+    logic: {
+        titleBar: "#312e81", // Indigo 900
+        body: "#1e1b4b",     // Indigo 950
+        accent: "#818cf8",   // Indigo 400
+        text: "#e0e7ff"      // Indigo 100
+    },
+    sink: {
+        titleBar: "#064e3b", // Emerald 900
+        body: "#022c22",     // Emerald 950
+        accent: "#10b981",   // Emerald 500
+        text: "#d1fae5"      // Emerald 100
+    },
+    action: {
+        titleBar: "#581c87", // Purple 900
+        body: "#2e1065",     // Purple 950
+        accent: "#a855f7",   // Purple 500
+        text: "#f3e8ff"      // Purple 100
+    },
+    trigger: {
+        titleBar: "#164e63", // Cyan 900
+        body: "#083344",     // Cyan 950
+        accent: "#06b6d4",   // Cyan 500
+        text: "#cffafe"      // Cyan 100
+    },
+    // NEW — dedicated theme for the Code node
+    code: {
+        titleBar: "#0f172a", // Slate 900 (matches editor feel)
+        body:     "#020617", // Slate 950 — near-black, like a code editor
+        accent:   "#a855f7", // Purple 500 (matches Code node identity)
+        text:     "#e2e8f0"  // Slate 200
+    },
+
+
+
+        // Clean, neutral theme for Tools
+    tool: {
+        titleBar: "#334155", // Slate 700
+        body:     "#1e293b", // Slate 800 (Clean, professional gray)
+        accent:   "#94a3b8", // Slate 400
+        text:     "#f8fafc"  // Slate 50
+    },
+    // Clean, neutral theme for HTTP Requests
+    http: {
+        titleBar: "#0f172a", // Slate 900
+        body:     "#1e293b", // Slate 800
+        accent:   "#3b82f6", // Blue 500 (to keep the "web" feel)
+        text:     "#f1f5f9"  // Slate 100
+    },
+
+
+
+
+
+
+
+};
+
+/**
+ * Applies a professional theme to a LiteGraph node.
+ * @param {Object} node - The LiteGraph node instance.
+ * @param {Object} theme - The theme configuration from NODE_THEME.
+ */
+function applyNodeTheme(node, theme) {
+    if (!node || !theme) return;
+
+    // Node Core Aesthetics
+    node.color = theme.titleBar;
+    node.bgcolor = theme.body;
+    node.title_text_color = theme.text;
+    node.border_color = theme.accent;
+    node.boxcolor = theme.accent;
+    node.shape = LiteGraph.ROUND_SHAPE;
+
+    // Professional Port Styling
+    const portStyle = {
+        color: "#ffffff",
+        color_off: "#64748b", // Slate 500 (muted when inactive)
+        link_color: theme.accent
+    };
+
+    (node.inputs || []).forEach(input => Object.assign(input, portStyle));
+    (node.outputs || []).forEach(output => Object.assign(output, portStyle));
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Nodes
+
+
+// ============================================================
+// Enforce minimum node size — prevents widget overflow
+// ============================================================
+const MIN_NODE_WIDTH = 260;
+const MIN_NODE_HEIGHT = 100;
+
+function enforceNodeSize(node) {
+    if (!node || !node.size) return;
+    if (node.size[0] < MIN_NODE_WIDTH) node.size[0] = MIN_NODE_WIDTH;
+    if (node.size[1] < MIN_NODE_HEIGHT) node.size[1] = MIN_NODE_HEIGHT;
+}
+
+// Override addNode to enforce size after creation
+const _origAddNode = addNode;
+addNode = function(type) {
+    _origAddNode(type);
+    // The last-added node gets resized
+    const node = graph._nodes[graph._nodes.length - 1];
+    if (node) {
+        enforceNodeSize(node);
+        canvas.setDirty(true, true);
+    }
+};
+
+function NodeWebhookInput() { this.addOutput("out","string"); this.title="Webhook Input"; applyNodeTheme(this,NODE_THEME.trigger); }
+LiteGraph.registerNodeType("trigger/webhook", NodeWebhookInput);
+
+function NodeMarketData() {
+    this.properties = { coin:"bitcoin" }; this.addInput("in","string"); this.addOutput("out","string");
+    this.addWidget("text","Symbol","bitcoin", v => this.properties.coin = v);
+    this.title = "Market Data"; applyNodeTheme(this,NODE_THEME.source);
+}
+LiteGraph.registerNodeType("market/data", NodeMarketData);
+
+function NodeFilter() {
+    this.properties = { keyword:"Price" }; this.addInput("in","string"); this.addOutput("out","string");
+    this.addWidget("text","Filter","Price", v => this.properties.keyword = v);
+    this.title = "Text Filter"; applyNodeTheme(this,NODE_THEME.logic);
+}
+LiteGraph.registerNodeType("logic/filter", NodeFilter);
+
+function NodeMath() {
+    this.properties = { op:"multiply", value:0.98 }; this.addInput("in","string"); this.addOutput("out","string");
+    this.addWidget("combo","Op","multiply", v => this.properties.op = v, { values:["multiply","add","subtract","divide"] });
+    this.addWidget("number","Value",0.98, v => this.properties.value = v);
+    this.title = "Math"; applyNodeTheme(this,NODE_THEME.logic);
+}
+LiteGraph.registerNodeType("logic/math", NodeMath);
+
+function NodeCompare() {
+    this.properties = { operator:">", threshold:80000 }; this.addInput("in","string"); this.addOutput("out","string");
+    this.addWidget("combo","Op",">", v => this.properties.operator = v, { values:[">","<",">=","<=","=="] });
+    this.addWidget("number","Threshold",80000, v => this.properties.threshold = v);
+    this.title = "Compare"; applyNodeTheme(this,NODE_THEME.logic);
+}
+LiteGraph.registerNodeType("logic/compare", NodeCompare);
+
+function NodeJsonExtract() {
+    this.properties = { path:"price" }; this.addInput("in","string"); this.addOutput("out","string");
+    this.addWidget("text","Path","price", v => this.properties.path = v);
+    this.title = "JSON Extract"; applyNodeTheme(this,NODE_THEME.logic);
+}
+LiteGraph.registerNodeType("logic/json-extract", NodeJsonExtract);
+
+function NodeTool() {
+    this.properties = { service:"discord", message:"" };
+    this.addInput("in","string"); this.addOutput("out","string");
+    const names = Object.keys(TOOLS);
+    this.addWidget("combo","Service","discord", v => this.properties.service = v, { values:names });
+    this.addWidget("text","Message (opt)","", v => this.properties.message = v);
+    this.title = "Tool"; 
+    
+    applyNodeTheme(this, NODE_THEME.tool); // Changed from NODE_THEME.action
+}
+LiteGraph.registerNodeType("tool/integration", NodeTool);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function NodeCode() {
+    this.properties = {
+        lang: "javascript",
+        code: "// Click the Code node to edit.\n// Input: string from previous node.\n// Use output(value) to return a result."
+    };
+    this.addInput("in", "string");
+    this.addOutput("out", "string");
+
+    this.addWidget("combo", "Language", "javascript", v => this.properties.lang = v, { values: ["javascript", "python"] });
+
+    this.codePreviewWidget = this.addWidget(
+        "text",
+        "Code",
+        this.properties.code,
+        v => this.properties.code = v,
+        { readonly: true }
+    );
+
+    this.title = "Code";
+    this.size = [340, 170];
+
+    applyNodeTheme(this, NODE_THEME.code); // ← was NODE_THEME.logic
+}
+
+
+
+
+
+
+// Double-click opens the editor modal
+const _origNodeCodeOnDblClick = NodeCode.prototype.onDblClick;
+NodeCode.prototype.onDblClick = function(e, pos, canvas) {
+    if (window.openCodeEditor) {
+        window.openCodeEditor(this);
+        return true;
+    }
+    if (_origNodeCodeOnDblClick) {
+        return _origNodeCodeOnDblClick.call(this, e, pos, canvas);
+    }
+};
+
+// Hint pinned to the bottom edge — below the widget row, no overlap
+NodeCode.prototype.onDrawForeground = function(ctx) {
+    if (this.flags && this.flags.collapsed) return;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(168, 85, 247, 0.6)';
+    ctx.font = 'italic 11px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+
+    const cx = this.size[0] / 2;
+    const cy = this.size[1] - 8; // bottom padding
+
+    ctx.fillText('double-click to edit', cx, cy);
+    ctx.restore();
+};
+
+LiteGraph.registerNodeType("logic/code", NodeCode);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function NodeDelay() {
+    this.properties = { seconds: 5 };
+    this.addInput("in", "string");
+    this.addOutput("out", "string");
+    this.addWidget("number", "Seconds", 5, v => {
+        this.properties.seconds = Math.max(1, Math.min(300, Number(v) || 5));
+    });
+    this.title = "Delay";
+    this.size = [200, 60];
+    applyNodeTheme(this, NODE_THEME.logic);
+}
+LiteGraph.registerNodeType("logic/delay", NodeDelay);
+
+function NodeOutput() { this.addInput("in","string"); this.title = "Terminal Output"; applyNodeTheme(this,NODE_THEME.sink); }
+
+
+function NodeHttpRequest() {
+    this.properties = { url: "", method: "GET", body: "", headers: "" };
+    this.addInput("in", "string");
+    this.addOutput("out", "string");
+    this.addWidget("text", "URL", "", v => this.properties.url = v);
+    this.addWidget("combo", "Method", "GET", v => this.properties.method = v, { values: ["GET", "POST", "PUT", "DELETE", "PATCH"] });
+    this.addWidget("text", "Body", "", v => this.properties.body = v);
+    this.addWidget("text", "Headers", "", v => this.properties.headers = v);
+    this.title = "HTTP Request";
+    this.size = [340, 160];
+    
+    applyNodeTheme(this, NODE_THEME.http); // Changed from NODE_THEME.action
+}
+LiteGraph.registerNodeType("action/http", NodeHttpRequest);
+
+
+LiteGraph.registerNodeType("action/http", NodeHttpRequest);
+
+LiteGraph.registerNodeType("output/console", NodeOutput);
+
+// Toast
+function toast(msg, type='info', duration=2500) {
+    const c = document.getElementById('toastContainer');
+    const el = document.createElement('div');
+    el.className = `toast ${type}`; el.textContent = msg;
+    c.appendChild(el);
+    setTimeout(() => { el.style.opacity='0'; el.style.transform='translateY(10px)'; setTimeout(()=>el.remove(),250); }, duration);
+}
+
+// Add node
+let spawnOffset = 0;
+function addNode(type) {
+    try {
+        fitCanvas();
+        const node = LiteGraph.createNode(type);
+        if (!node) throw new Error(`Unknown: ${type}`);
+        const rect = canvas.canvas.getBoundingClientRect(), ds = canvas.ds;
+        const cx = (rect.width/2 - ds.offset[0]) / ds.scale;
+        const cy = (rect.height/2 - ds.offset[1]) / ds.scale;
+        const step = spawnOffset % 10;
+        node.pos = [cx - 100 + step*30, cy - 50 + step*25];
+        spawnOffset++;
+        graph.add(node);
+        canvas.selected_nodes = {};
+        canvas.setDirty(true, true);
+        toast(`Added: ${node.title}`, 'info', 1200);
+    } catch (e) { toast(`Error: ${e.message}`, 'error'); console.error(e); }
+}
+
+// Build payload
+
+// ============================================================
+// Safe JSON helpers — must exist before buildPayload() runs
+// ============================================================
+function safeJsonParse(str) {
+    if (str === null || str === undefined) return null;
+    if (typeof str === 'object') return str;  // already parsed
+    if (typeof str !== 'string') return str;
+    const trimmed = str.trim();
+    if (trimmed === '') return null;
+    try {
+        return JSON.parse(trimmed);
+    } catch (e) {
+        console.warn('safeJsonParse: invalid JSON, returning raw string:', trimmed.slice(0, 100));
+        return trimmed;  // fallback — pass raw string through
+    }
+}
+
+function safeJsonStringify(val) {
+    try {
+        return JSON.stringify(val);
+    } catch (e) {
+        console.warn('safeJsonStringify failed:', e);
+        return String(val);
+    }
+}
+
+function buildPayload() {
+    const visited = new Set(), ordered = [];
+    function visit(n) {
+        if (!n || visited.has(n)) return;
+        visited.add(n);
+        (n.inputs||[]).forEach(input => {
+            if (input.link != null) {
+                const link = graph.links[input.link];
+                if (link) visit(graph.getNodeById(link.origin_id));
+            }
+        });
+        ordered.push(n);
+    }
+    const hasWires = Object.keys(graph.links || {}).length > 0;
+    if (hasWires) {
+        const sinks = graph._nodes.filter(n => !n.outputs || n.outputs.every(o => o.link == null));
+        (sinks.length ? sinks : graph._nodes).forEach(visit);
+    } else graph._nodes.forEach(visit);
+
+    // Only sort by stage if there are NO wires.
+    // When wires exist, trust the topological order — it already follows edges.
+    if (!hasWires) {
+        const stageOrder = {
+            'trigger/webhook':0, 'market/data':0,
+            'logic/filter':1, 'logic/math':1, 'logic/compare':1, 'logic/json-extract':1, 'logic/code':1,
+            'action/http':2, 'tool/integration':2, 'output/console':3,
+        };
+        ordered.sort((a,b) => (stageOrder[a.type]??99) - (stageOrder[b.type]??99));
+    }
+
+    const payload = [];
+    for (const n of ordered) {
+        const d = n.properties || {};
+        switch (n.type) {
+            case 'trigger/webhook': payload.push({type:'webhook-input', data:{}}); break;
+            case 'market/data': payload.push({type:'market-data', data:{coin:d.coin||'bitcoin'}}); break;
+            case 'logic/filter': payload.push({type:'filter', data:{keyword:d.keyword||'Price'}}); break;
+            case 'logic/math': payload.push({type:'math', data:{op:d.op||'multiply', value:Number(d.value)||1}}); break;
+            case 'logic/compare': payload.push({type:'compare', data:{operator:d.operator||'>', threshold:Number(d.threshold)||0}}); break;
+            case 'logic/json-extract': payload.push({type:'json-extract', data:{path:d.path||''}}); break;
+            case 'tool/integration': payload.push({type:'tool', data:{service:d.service||'http-custom', message:d.message||''}}); break;
+            case 'action/http': payload.push({type:'http-request', data:{
+                url: d.url || '',
+                method: d.method || 'GET',
+                body: d.body ? safeJsonParse(d.body) : null,
+                headers: d.headers ? safeJsonParse(d.headers) : {}
+            }}); break;
+            case 'logic/delay': payload.push({type:'delay', data:{seconds: Number(d.seconds) || 5}}); break;
+            case 'logic/code': payload.push({type:'code', data:{lang:d.lang||'javascript', code:d.code||''}}); break;
+            case 'output/console': payload.push({type:'console', data:{}}); break;
+        }
+    }
+    return payload;
+}
+
+// Logs
+function classifyLog(m) {
+    const s = m.toLowerCase();
+    if (s.includes('error') || s.includes('reject') || s.includes('fail')) return 'error';
+    if (s.includes('success') || s.includes('match') || s.includes('validat') || s.includes('pass')) return 'success';
+    if (s.includes('skip') || s.includes('warn')) return 'warn';
+    return 'info';
+}
+function renderLogs(logs, result) {
+    const logDiv = document.getElementById('log');
+    logDiv.innerHTML = '';
+    (logs||[]).forEach(l => {
+        const d = document.createElement('div');
+        d.className = `log-entry ${classifyLog(l)}`;
+        d.textContent = l; logDiv.appendChild(d);
+    });
+    if (result) {
+        const r = document.createElement('div');
+        r.className = 'result-card';
+        r.innerHTML = `<i class="fas fa-check-circle mr-2"></i>${result}`;
+        logDiv.appendChild(r);
+    }
+    logDiv.scrollTop = logDiv.scrollHeight;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Run
+let isRunning = false;
+async function run() {
+    if (isRunning) return;
+    const btn = document.getElementById('runBtn'), txt = document.getElementById('runBtnText'), log = document.getElementById('log');
+    const payload = buildPayload();
+    if (payload.length === 0) { toast('No nodes!','error'); return; }
+    isRunning = true; btn.disabled = true; txt.textContent = 'EXECUTING...';
+    btn.querySelector('i').className = 'fas fa-spinner fa-spin';
+    log.innerHTML = '<div class="log-entry info">Sending...</div>';
+    try {
+        const wfName = document.getElementById('workflowName').value.trim() || 'manual';
+        const res = await fetch('http://localhost:5000/run', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({nodes:payload, workflow_name:wfName}),
+        });
+        if (!res.ok) throw new Error(`Server ${res.status}`);
+        const data = await res.json();
+        renderLogs(data.logs, data.data);
+        if (data.status === 'success' && data.data) toast('Workflow complete!','success');
+        else toast('Finished','info');
+    } catch (e) {
+        log.innerHTML = `<div class="log-entry error">${e.message}</div>`;
+        toast(e.message, 'error');
+    } finally {
+        isRunning = false; btn.disabled = false; txt.textContent = 'EXECUTE WORKFLOW';
+        btn.querySelector('i').className = 'fas fa-play';
+    }
+}
+
+// Save / schedule / webhook
+
+// UI Helpers
+function resetWorkflowUI() {
+    // 1. Forcefully clear the LiteGraph canvas
+    if (typeof graph !== 'undefined') {
+        graph.clear();
+        if (typeof canvas !== 'undefined') {
+            canvas.selected_nodes = {};
+            canvas.setDirty(true, true);
+            canvas.draw(true, true);
+        }
+    }
+
+    // 2. Reset the UI state
+    document.getElementById('workflowSelector').value = '';
+    document.getElementById('workflowName').value = '';
+    document.getElementById('workflowInputContainer').style.display = 'block';
+    document.getElementById('workflowLoadedContainer').style.display = 'none';
+    document.getElementById('workflowName').focus();
+    
+    // Clear memory
+    localStorage.removeItem('workflow_last_loaded');
+}
+
+function setLoadedUI(name) {
+    document.getElementById('workflowName').value = name;
+    document.getElementById('workflowInputContainer').style.display = 'none';
+    document.getElementById('workflowLoadedContainer').style.display = 'block';
+    document.getElementById('currentLoadedName').textContent = name;
+    document.getElementById('workflowSelector').value = name;
+    
+    // Remember this workflow for next time
+    localStorage.setItem('workflow_last_loaded', name);
+}
+
+function handleWorkflowSelect() {
+    const val = document.getElementById('workflowSelector').value;
+    if (val) {
+        loadWorkflowFromSelector(val);
+    } else {
+        resetWorkflowUI();
+    }
+}
+
+
+// UI Helpers
+function resetWorkflowUI() {
+    document.getElementById('workflowSelector').value = '';
+    document.getElementById('workflowName').value = '';
+    document.getElementById('workflowInputContainer').style.display = 'block';
+    document.getElementById('workflowLoadedContainer').style.display = 'none';
+    document.getElementById('workflowName').focus();
+}
+
+function setLoadedUI(name) {
+    document.getElementById('workflowName').value = name;
+    document.getElementById('workflowInputContainer').style.display = 'none';
+    document.getElementById('workflowLoadedContainer').style.display = 'block';
+    document.getElementById('currentLoadedName').textContent = name;
+    document.getElementById('workflowSelector').value = name;
+}
+
+function handleWorkflowSelect() {
+    const val = document.getElementById('workflowSelector').value;
+    if (val) {
+        loadWorkflowFromSelector(val);
+    } else {
+        resetWorkflowUI();
+    }
+}
+
+// Custom Confirmation Modal
+function confirmLoadWorkflow(name, onConfirm) {
+    document.querySelectorAll('.modal-overlay').forEach(m => m.remove());
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    overlay.innerHTML = `
+        <div class="modal" style="width: 400px;">
+            <h2 style="font-size:16px; display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+                <i class="fas fa-exclamation-triangle text-amber-500"></i> Load Workflow
+            </h2>
+            <p class="text-sm text-slate-300 mb-6" style="line-height:1.5;">
+                Are you sure you want to load <strong>"${name}"</strong>?<br>
+                Any unsaved changes on the canvas will be lost.
+            </p>
+            <div class="modal-buttons">
+                <button class="modal-btn secondary" id="cancelLoadBtn">Cancel</button>
+                <button class="modal-btn primary" id="confirmLoadBtn">Load Workflow</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    document.getElementById('cancelLoadBtn').addEventListener('click', () => {
+        overlay.remove();
+        resetWorkflowUI();
+    });
+
+    document.getElementById('confirmLoadBtn').addEventListener('click', () => {
+        overlay.remove();
+        onConfirm();
+    });
+}
+
+
+// UI Helpers
+function resetWorkflowUI() {
+    document.getElementById('workflowSelector').value = '';
+    document.getElementById('workflowName').value = '';
+    document.getElementById('workflowInputContainer').style.display = 'block';
+    document.getElementById('workflowLoadedContainer').style.display = 'none';
+    document.getElementById('workflowName').focus();
+}
+
+function setLoadedUI(name) {
+    document.getElementById('workflowName').value = name;
+    document.getElementById('workflowInputContainer').style.display = 'none';
+    document.getElementById('workflowLoadedContainer').style.display = 'block';
+    document.getElementById('currentLoadedName').textContent = name;
+    document.getElementById('workflowSelector').value = name;
+}
+
+function handleWorkflowSelect() {
+    const val = document.getElementById('workflowSelector').value;
+    if (val) {
+        loadWorkflowFromSelector(val);
+    } else {
+        resetWorkflowUI();
+    }
+}
+
+// Ultra-Modern Confirmation Modal
+function confirmLoadWorkflow(name, onConfirm) {
+    document.querySelectorAll('.modal-overlay').forEach(m => m.remove());
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.backdropFilter = 'blur(8px)';
+    overlay.style.webkitBackdropFilter = 'blur(8px)';
+    
+    overlay.addEventListener('click', (e) => { 
+        if (e.target === overlay) {
+            overlay.remove();
+            resetWorkflowUI();
+        } 
+    });
+
+    overlay.innerHTML = `
+        <div class="modal" style="width: 420px; padding: 28px; background: #0f172a; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; box-shadow: 0 24px 48px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05) inset;">
+            <div style="display:flex; align-items:flex-start; gap:16px; margin-bottom: 24px;">
+                <div style="width: 40px; height: 40px; border-radius: 50%; background: rgba(59, 130, 246, 0.15); display:flex; align-items:center; justify-content:center; flex-shrink:0; border: 1px solid rgba(59, 130, 246, 0.3);">
+                    <i class="fas fa-layer-group" style="color: #60a5fa; font-size: 16px;"></i>
+                </div>
+                <div>
+                    <h2 style="font-size: 16px; font-weight: 600; color: #f1f5f9; margin: 0 0 6px 0;">Load Workflow</h2>
+                    <p style="font-size: 13px; color: #94a3b8; margin: 0; line-height: 1.5;">
+                        You are about to load <strong style="color: #e2e8f0; font-weight: 600;">${name}</strong>. Any unsaved changes on the canvas will be lost.
+                    </p>
+                </div>
+            </div>
+            
+            <div style="display:flex; gap: 12px; justify-content: flex-end;">
+                <button id="cancelLoadBtn" style="padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid #334155; color: #cbd5e1; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s;">
+                    Cancel
+                </button>
+                <button id="confirmLoadBtn" style="padding: 8px 16px; border-radius: 8px; background: #3b82f6; border: 1px solid #3b82f6; color: white; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);">
+                    Load Workflow
+                </button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const cancelBtn = document.getElementById('cancelLoadBtn');
+    const confirmBtn = document.getElementById('confirmLoadBtn');
+    
+    cancelBtn.addEventListener('mouseenter', () => cancelBtn.style.background = 'rgba(255,255,255,0.05)');
+    cancelBtn.addEventListener('mouseleave', () => cancelBtn.style.background = 'transparent');
+    
+    confirmBtn.addEventListener('mouseenter', () => { confirmBtn.style.background = '#2563eb'; confirmBtn.style.borderColor = '#2563eb'; });
+    confirmBtn.addEventListener('mouseleave', () => { confirmBtn.style.background = '#3b82f6'; confirmBtn.style.borderColor = '#3b82f6'; });
+
+    cancelBtn.addEventListener('click', () => {
+        overlay.remove();
+        resetWorkflowUI();
+    });
+
+    confirmBtn.addEventListener('click', () => {
+        overlay.remove();
+        onConfirm();
+    });
+}
+
+// ============================================================
+// AUTOSAVE LOGIC
+// ============================================================
+let autosaveTimeout = null;
+
+function triggerAutosave() {
+    // Only autosave if a workflow is currently loaded
+    const loadedContainer = document.getElementById('workflowLoadedContainer');
+    if (loadedContainer.style.display === 'none') return;
+
+    clearTimeout(autosaveTimeout);
+    autosaveTimeout = setTimeout(async () => {
+        const name = document.getElementById('currentLoadedName').textContent.trim();
+        if (!name) return;
+
+        const payload = {
+            nodes: buildPayload(),
+            graph: graph.serialize() 
+        };
+
+        try {
+            const res = await fetch(`http://localhost:5000/workflows/${encodeURIComponent(name)}`, {
+                method:'PUT', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify(payload),
+            });
+            if (res.ok) {
+                console.log(`[Autosave] Saved: ${name}`);
+                // Optional: tiny subtle toast, or just let it be silent
+                // toast('Auto-saved', 'info', 1000);
+            }
+        } catch (e) {
+            console.error('[Autosave] Failed:', e);
+        }
+    }, 2000); // Wait 2 seconds after last change
+}
+
+// Hook into LiteGraph events to trigger autosave
+setTimeout(() => {
+    if (typeof graph !== 'undefined') {
+        const originalOnNodeAdded = graph.onNodeAdded;
+        graph.onNodeAdded = function(node) {
+            if (originalOnNodeAdded) originalOnNodeAdded.call(this, node);
+            triggerAutosave();
+        };
+
+        const originalOnNodeRemoved = graph.onNodeRemoved;
+        graph.onNodeRemoved = function(node) {
+            if (originalOnNodeRemoved) originalOnNodeRemoved.call(this, node);
+            triggerAutosave();
+        };
+
+        // Trigger on wire connections
+        const originalOnConnectionChange = graph.onConnectionChange;
+        graph.onConnectionChange = function(node) {
+            if (originalOnConnectionChange) originalOnConnectionChange.call(this, node);
+            triggerAutosave();
+        };
+
+        // Trigger on node movement/drag
+        const originalOnNodeMoved = graph.onNodeMoved;
+        graph.onNodeMoved = function(node) {
+            if (originalOnNodeMoved) originalOnNodeMoved.call(this, node);
+            triggerAutosave();
+        };
+        
+        // Also trigger when widget values change by wrapping processMouseUp
+        const originalProcessMouseUp = canvas.processMouseUp;
+        canvas.processMouseUp = function(e) {
+            const r = originalProcessMouseUp.call(this, e);
+            triggerAutosave();
+            return r;
+        };
+    }
+}, 500);
+
+
+// Rename Modal Logic
+function promptRenameWorkflow() {
+    const currentName = document.getElementById('currentLoadedName').textContent.trim();
+    if (!currentName) return;
+
+    document.querySelectorAll('.modal-overlay').forEach(m => m.remove());
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.backdropFilter = 'blur(8px)';
+    overlay.style.webkitBackdropFilter = 'blur(8px)';
+    
+    overlay.innerHTML = `
+        <div class="modal" style="width: 400px; padding: 24px; background: #0f172a; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; box-shadow: 0 24px 48px rgba(0,0,0,0.4);">
+            <h2 style="font-size: 16px; font-weight: 600; color: #f1f5f9; margin: 0 0 16px 0; display:flex; align-items:center; gap:8px;">
+                <i class="fas fa-pen" style="color: #a855f7;"></i> Rename Workflow
+            </h2>
+            
+            <div style="margin-bottom: 24px;">
+                <label style="display:block; font-size: 11px; font-weight: 600; color: #94a3b8; text-transform: uppercase; margin-bottom: 6px;">New Name</label>
+                <input id="newWorkflowNameInput" type="text" class="pro-input" value="${currentName}" style="width: 100%;">
+            </div>
+            
+            <div style="display:flex; gap: 12px; justify-content: flex-end;">
+                <button id="cancelRenameBtn" style="padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid #334155; color: #cbd5e1; font-size: 13px; font-weight: 500; cursor: pointer;">
+                    Cancel
+                </button>
+                <button id="confirmRenameBtn" style="padding: 8px 16px; border-radius: 8px; background: #3b82f6; border: 1px solid #3b82f6; color: white; font-size: 13px; font-weight: 500; cursor: pointer; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);">
+                    Rename
+                </button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const input = document.getElementById('newWorkflowNameInput');
+    input.focus();
+    input.select();
+
+    document.getElementById('cancelRenameBtn').addEventListener('click', () => overlay.remove());
+    
+    document.getElementById('confirmRenameBtn').addEventListener('click', async () => {
+        const newName = input.value.trim();
+        if (!newName || newName === currentName) { overlay.remove(); return; }
+
+        try {
+            const res = await fetch(`http://localhost:5000/workflows/${encodeURIComponent(currentName)}/rename`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ new_name: newName })
+            });
+            const data = await res.json();
+            
+            if (res.ok) {
+                toast(`Renamed to: ${newName}`, 'success');
+                overlay.remove();
+                
+                // Update UI to point to new name
+                document.getElementById('currentLoadedName').textContent = newName;
+                await refreshWorkflowList();
+                document.getElementById('workflowSelector').value = newName;
+            } else {
+                toast(data.error || 'Rename failed', 'error');
+            }
+        } catch (e) {
+            toast('Network error: ' + e.message, 'error');
+        }
+    });
+}
+
+async function saveCurrentWorkflow() {
+    let name = document.getElementById('workflowName').value.trim();
+    
+    if (document.getElementById('workflowInputContainer').style.display === 'none') {
+        name = document.getElementById('currentLoadedName').textContent.trim();
+    }
+    
+    if (!name) { 
+        toast('Enter a workflow name first','error'); 
+        resetWorkflowUI();
+        return false; 
+    }
+    
+    const payload = {
+        nodes: buildPayload(),
+        graph: graph.serialize() 
+    };
+
+    try {
+        const res = await fetch(`http://localhost:5000/workflows/${encodeURIComponent(name)}`, {
+            method:'PUT', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(payload),
+        });
+        
+        if (res.ok) { 
+            toast(`Saved: ${name}`,'success'); 
+            await refreshWorkflowList(); 
+            setLoadedUI(name); 
+            return true; 
+        }
+        toast('Save failed','error'); return false;
+    } catch(e) {
+        toast('Network error saving','error'); return false;
+    }
+}
+
+async function refreshWorkflowList() {
+    try {
+        const res = await fetch('http://localhost:5000/workflows');
+        const data = await res.json();
+        const selector = document.getElementById('workflowSelector');
+        const currentVal = selector.value;
+        
+        selector.innerHTML = '<option value="">-- Load saved --</option>';
+        
+        if (data.workflows && data.workflows.length > 0) {
+            data.workflows.forEach(wfName => {
+                const opt = document.createElement('option');
+                opt.value = wfName;
+                opt.textContent = wfName;
+                selector.appendChild(opt);
+            });
+        }
+        
+        if (currentVal && data.workflows.includes(currentVal)) {
+            selector.value = currentVal;
+        }
+    } catch (e) {
+        console.warn("Could not load workflow list:", e);
+    }
+}
+
+async function loadWorkflowFromSelector(name) {
+    if (!name) return; 
+
+    confirmLoadWorkflow(name, async () => {
+        try {
+            const res = await fetch(`http://localhost:5000/workflows/${encodeURIComponent(name)}`);
+            if (!res.ok) throw new Error("Workflow not found");
+            
+            const data = await res.json();
+            
+            graph.clear();
+            
+            if (data.graph) {
+                graph.configure(data.graph);
+            } else {
+                toast('No visual graph data found', 'warn');
+            }
+            
+            canvas.setDirty(true, true);
+            canvas.draw(true, true);
+            
+            setLoadedUI(name); 
+            toast(`Loaded: ${name}`, 'success');
+            
+        } catch (e) {
+            console.error("Load failed:", e);
+            toast('Failed to load: ' + e.message, 'error');
+            resetWorkflowUI();
+        }
+    });
+}
+
+
+
+async function scheduleCurrentWorkflow() {
+    const name = document.getElementById('workflowName').value.trim();
+    if (!name) { toast('Enter workflow name','error'); return; }
+    if (!await saveCurrentWorkflow()) return;
+    const res = await fetch(`http://localhost:5000/schedule/${encodeURIComponent(name)}`, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({interval_seconds:60}),
+    });
+    const data = await res.json();
+    toast(res.ok ? `Scheduled 60s: ${name}` : (data.error||'Failed'), res.ok ? 'success' : 'error');
+}
+async function showWebhookUrl() {
+    const name = document.getElementById('workflowName').value.trim();
+    if (!name) { toast('Enter workflow name','error'); return; }
+    if (!await saveCurrentWorkflow()) return;
+    const url = `http://localhost:5000/webhook/${encodeURIComponent(name)}`;
+    document.getElementById('log').innerHTML = `
+        <div class="log-entry success">
+            <div class="font-bold mb-2">Webhook URL for "${name}":</div>
+            <code class="text-green-300 block mb-3 break-all">${url}</code>
+            <div class="text-[10px] text-slate-400 mb-1">Test:</div>
+            <code class="text-[10px] text-slate-300 block break-all bg-black/30 p-2 rounded">curl -X POST ${url} -H "Content-Type: application/json" -d "{}"</code>
+        </div>`;
+}
+async function showExecutions() {
+    const name = document.getElementById('workflowName').value.trim();
+    if (!name) { toast('Enter workflow name','error'); return; }
+    const res = await fetch(`http://localhost:5000/executions/${encodeURIComponent(name)}?limit=20`);
+    const data = await res.json();
+    const log = document.getElementById('log');
+    log.innerHTML = '';
+    if (!data.executions || !data.executions.length) {
+        log.innerHTML = '<div class="log-entry info">No executions yet.</div>';
+        return;
+    }
+    data.executions.forEach(ex => {
+        const d = document.createElement('div');
+        d.className = `log-entry ${ex.status==='success'?'success':'error'}`;
+        const ts = ex.timestamp ? ex.timestamp.slice(0,19).replace('T',' ') : '';
+        d.textContent = `[${ex.source}] ${ts} → ${ex.result||'(no result)'}`;
+        log.appendChild(d);
+    });
+}
+
+// Credentials panel
+async function openCredentialsPanel() {
+    try {
+        const res = await fetch('http://localhost:5000/credentials');
+        const data = res.ok ? await res.json() : { configured: [] };
+        const configured = new Set(data.configured || []);
+
+        document.querySelectorAll('.modal-overlay').forEach(m => m.remove());
+
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+        const rowsHtml = Object.keys(TOOLS).map(key => {
+            const tool = TOOLS[key];
+            const isConfigured = configured.has(key);
+            return `
+                <div class="flex items-center gap-2 p-2 rounded bg-slate-800/40 border border-slate-700">
+                    <div class="tool-icon" style="--tool-color:${tool.color}">
+                        <i class="${tool.brand ? 'fab' : 'fas'} ${tool.icon}"></i>
+                    </div>
+                    <span class="text-xs font-bold text-slate-200 flex-1">${tool.label}</span>
+                    <span class="tool-badge ${isConfigured ? 'configured' : 'missing'}">${isConfigured ? 'configured' : 'not set'}</span>
+                    <button class="text-[10px] text-blue-400 hover:text-blue-300 px-2" data-service="${key}">Configure</button>
+                </div>`;
+        }).join('');
+
+        overlay.innerHTML = `
+            <div class="modal">
+                <h2><i class="fas fa-key text-violet-400 mr-2"></i>Tool Credentials</h2>
+                <p class="text-xs text-slate-400 mb-4">Configure each tool once — all workflows can use it.</p>
+                <div id="credsList" class="space-y-2">${rowsHtml}</div>
+                <div class="modal-buttons">
+                    <button class="modal-btn secondary" id="closeCredsBtn">Close</button>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+
+        // Attach event listeners AFTER insertion (safer than inline onclick)
+        document.getElementById('closeCredsBtn').addEventListener('click', () => overlay.remove());
+        overlay.querySelectorAll('button[data-service]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const service = btn.dataset.service;
+                openEditCredsModal(service);
+            });
+        });
+    } catch (e) {
+        console.error("openCredentialsPanel failed:", e);
+        toast("Failed to load credentials: " + e.message, 'error', 4000);
+    }
+}
+
+async function openEditCredsModal(service) {
+    try {
+        const tool = TOOLS[service];
+        if (!tool) { toast("Unknown tool: " + service, 'error'); return; }
+
+        // Fetch existing credentials (safe — 404 returns empty object)
+        let existing = {};
+        try {
+            const r = await fetch(`http://localhost:5000/credentials/${service}`);
+            if (r.ok) existing = await r.json();
+        } catch (_) { /* not configured yet — that's fine */ }
+
+        // Remove any prior modal
+        document.querySelectorAll('.modal-overlay').forEach(m => m.remove());
+
+        const fieldsHtml = tool.creds.length > 0
+            ? tool.creds.map(k => {
+                const val = (existing[k] || '').toString().replace(/"/g, '&quot;');
+                return `<label>${k.replace(/_/g, ' ')}</label><input name="${k}" value="${val}" autocomplete="off" />`;
+            }).join('')
+            : '<p class="text-xs text-slate-500">This tool requires no credentials.</p>';
+
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+        overlay.innerHTML = `
+            <div class="modal">
+                <h2><i class="${tool.brand ? 'fab' : 'fas'} ${tool.icon} mr-2" style="color:${tool.color}"></i>${tool.label} Credentials</h2>
+                <form id="credsForm">
+                    ${fieldsHtml}
+                    <div class="modal-buttons">
+                        <button type="button" class="modal-btn secondary" id="cancelCreds">Cancel</button>
+                        <button type="submit" class="modal-btn primary">Save</button>
+                    </div>
+                </form>
+            </div>`;
+        document.body.appendChild(overlay);
+
+        document.getElementById('cancelCreds').addEventListener('click', () => overlay.remove());
+
+        document.getElementById('credsForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const creds = {};
+            tool.creds.forEach(k => { creds[k] = form.elements[k].value; });
+            try {
+                const res = await fetch(`http://localhost:5000/credentials/${service}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(creds),
+                });
+                if (res.ok) {
+                    toast(`${tool.label} saved`, 'success');
+                    overlay.remove();
+                    // Re-open main credentials panel with fresh badges
+                    setTimeout(openCredentialsPanel, 100);
+                } else {
+                    toast('Save failed: ' + res.status, 'error');
+                }
+            } catch (err) {
+                toast('Save error: ' + err.message, 'error');
+            }
+        });
+    } catch (e) {
+        console.error("openEditCredsModal failed:", e);
+        toast("Failed to open editor: " + e.message, 'error', 4000);
+    }
+}
+
+// Expose to window in case any inline handler needs them
+window.openCredentialsPanel = openCredentialsPanel;
+window.openEditCredsModal = openEditCredsModal;
+
+// Bindings
+document.getElementById('runBtn').onclick = run;
+document.addEventListener('keydown', e => {
+    if ((e.ctrlKey||e.metaKey) && e.key === 'Enter') { e.preventDefault(); run(); }
+});
+
+// Log panel collapse
+(function() {
+    const panel = document.getElementById('logPanel'), log = document.getElementById('log'), header = document.getElementById('logHeader'), icon = document.getElementById('logToggleIcon');
+    let collapsed = false;
+    header.addEventListener('click', e => {
+        if (e.target.closest('button')) return;
+        collapsed = !collapsed;
+        if (collapsed) { log.style.display='none'; panel.style.maxHeight='48px'; icon.className='fas fa-chevron-down text-[10px] text-slate-500'; }
+        else { log.style.display=''; panel.style.maxHeight='60vh'; log.style.maxHeight='calc(60vh - 48px)'; icon.className='fas fa-chevron-up text-[10px] text-slate-500'; log.scrollTop = log.scrollHeight; }
+    });
+    new MutationObserver(() => { if (!collapsed) log.scrollTop = log.scrollHeight; }).observe(log, {childList:true});
+})();
+
+setTimeout(() => toast('Click a node in the sidebar to start','info',4000), 800);
+setTimeout(async () => {
+    await refreshWorkflowList();
+    
+    // Auto-load the last used workflow
+    const lastLoaded = localStorage.getItem('workflow_last_loaded');
+    if (lastLoaded) {
+        try {
+            const res = await fetch(`http://localhost:5000/workflows/${encodeURIComponent(lastLoaded)}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.graph) {
+                    graph.configure(data.graph);
+                    canvas.setDirty(true, true);
+                    canvas.draw(true, true);
+                    setLoadedUI(lastLoaded);
+                    toast(`Restored: ${lastLoaded}`, 'info', 2000);
+                }
+            } else {
+                // Workflow was deleted on backend, reset UI
+                resetWorkflowUI();
+            }
+        } catch(e) {
+            resetWorkflowUI();
+        }
+    } else {
+        // No last workflow, ensure canvas is empty
+        resetWorkflowUI();
+    }
+}, 500);
+
+// On load, ensure every HTTP Request node has enough room
+setTimeout(() => {
+    if (typeof graph === 'undefined') return;
+    graph._nodes.forEach(node => {
+        if (node.type === 'action/http' && node.size) {
+            if (node.size[0] < 340) node.size[0] = 340;
+            if (node.size[1] < 160) node.size[1] = 160;
+        }
+    });
+    if (typeof canvas !== 'undefined') canvas.setDirty(true, true);
+}, 500);
+
+
+// ============================================================
+// CODE EDITOR MODAL — full-screen editing like n8n
+// ============================================================
+(function() {
+    let codeMirrorInstance = null;
+    let activeNode = null;
+    let originalCode = '';
+    let originalLang = 'javascript';
+    
+    function initCodeMirror() {
+        if (codeMirrorInstance) return codeMirrorInstance;
+        const host = document.getElementById('codeEditorHost');
+        if (!host || typeof CodeMirror === 'undefined') {
+            console.error('[code-modal] CodeMirror not loaded');
+            return null;
+        }
+        codeMirrorInstance = CodeMirror(host, {
+            value: '',
+            mode: 'javascript',
+            theme: 'dracula',
+            lineNumbers: true,
+            indentUnit: 2,
+            tabSize: 2,
+            indentWithTabs: false,
+            autoCloseBrackets: true,
+            matchBrackets: true,
+            lineWrapping: true,
+            extraKeys: {
+                'Ctrl-Enter': () => document.getElementById('codeTestBtn').click(),
+                'Cmd-Enter': () => document.getElementById('codeTestBtn').click(),
+                'Esc': () => closeModal()
+            }
+        });
+        return codeMirrorInstance;
+    }
+    
+    window.openCodeEditor = function(node) {
+        if (!node || node.type !== 'logic/code') {
+            toast('Open the Code node first', 'error');
+            return;
+        }
+        activeNode = node;
+        originalCode = (node.properties && node.properties.code) || '';
+        originalLang = (node.properties && node.properties.lang) || 'javascript';
+        
+        const overlay = document.getElementById('codeModalOverlay');
+        const title = document.getElementById('codeModalTitle');
+        const langSelect = document.getElementById('codeModalLang');
+        const testOutput = document.getElementById('codeTestOutput');
+        
+        title.textContent = 'Edit Code — ' + (node.title || 'Code Node');
+        langSelect.value = originalLang;
+        testOutput.classList.remove('visible');
+        document.getElementById('codeTestResult').innerHTML = '';
+        
+        overlay.classList.add('active');
+        
+        const cm = initCodeMirror();
+        if (cm) {
+            cm.setValue(originalCode);
+            cm.setOption('mode', originalLang === 'python' ? 'python' : 'javascript');
+            setTimeout(() => cm.refresh(), 10);
+        }
+    };
+    
+    function closeModal() {
+        const overlay = document.getElementById('codeModalOverlay');
+        overlay.classList.remove('active');
+        activeNode = null;
+    }
+    
+
+
+
+
+
+
+document.getElementById('codeSaveBtn').addEventListener('click', () => {
+    if (!activeNode || !codeMirrorInstance) return;
+    const newCode = codeMirrorInstance.getValue();
+    activeNode.properties.code = newCode;
+    activeNode.properties.lang = document.getElementById('codeModalLang').value;
+
+    // Sync the preview widget so the node reflects the edit
+    if (activeNode.codePreviewWidget) {
+        activeNode.codePreviewWidget.value = newCode;
+    }
+
+    activeNode.setDirtyCanvas(true, true);
+    toast('Code saved', 'success', 1500);
+    closeModal();
+});
+
+
+    
+    // Cancel
+    document.getElementById('codeCancelBtn').addEventListener('click', closeModal);
+    
+    // Test button — runs code against a sample input
+    document.getElementById('codeTestBtn').addEventListener('click', async () => {
+        if (!codeMirrorInstance) return;
+        const btn = document.getElementById('codeTestBtn');
+        const output = document.getElementById('codeTestOutput');
+        const resultDiv = document.getElementById('codeTestResult');
+        
+        btn.disabled = true;
+        btn.textContent = 'Testing...';
+        output.classList.add('visible');
+        resultDiv.innerHTML = '<div class="result-line">Running...</div>';
+        
+        const code = codeMirrorInstance.getValue();
+        const lang = document.getElementById('codeModalLang').value;
+        
+        // Sample input — user's test string or default
+        const sampleInput = prompt('Test input (the value your code will receive):', 'Current BTC Price: $82,500.00') || 'Current BTC Price: $82,500.00';
+        
+        try {
+            const res = await fetch('http://localhost:5000/test-code', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    code: code,
+                    lang: lang,
+                    sample: sampleInput
+                })
+            });
+            const data = await res.json();
+            
+            if (data.ok) {
+                resultDiv.innerHTML = '<div class="result-line">' + escapeHtml(data.output || '(empty)') + '</div>';
+            } else {
+                resultDiv.innerHTML = '<div class="result-line error-line">' + escapeHtml(data.error || 'Unknown error') + '</div>';
+            }
+        } catch (e) {
+            resultDiv.innerHTML = '<div class="result-line error-line">Network error: ' + escapeHtml(e.message) + '</div>';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Test';
+        }
+    });
+    
+    function escapeHtml(s) {
+        return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    
+    // Language change updates CodeMirror mode
+    document.getElementById('codeModalLang').addEventListener('change', (e) => {
+        if (codeMirrorInstance) {
+            codeMirrorInstance.setOption('mode', e.target.value === 'python' ? 'python' : 'javascript');
+        }
+    });
+    
+    // Close on overlay click (but not on modal itself)
+    document.getElementById('codeModalOverlay').addEventListener('click', (e) => {
+        if (e.target.id === 'codeModalOverlay') closeModal();
+    });
+    
+    // Close on Escape
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && document.getElementById('codeModalOverlay').classList.contains('active')) {
+            closeModal();
+        }
+    });
+    
+    console.log('[code-modal] Ready');
+})();
+
+
+
+
+
+
+
+
+
+
+
+
+
+console.log("=== SCRIPT READY ===");
+
+(function() {
+    'use strict';
+    
+    const panel = document.getElementById('aiPanel');
+    const header = document.getElementById('aiHeader');
+    const body = document.getElementById('aiBody');
+    const input = document.getElementById('aiInput');
+    const sendBtn = document.getElementById('aiSendBtn');
+    const clearBtn = document.getElementById('aiClearBtn');
+    const modelSelector = document.getElementById('aiModelSelector');
+    const quickBtns = document.querySelectorAll('.ai-quick-btn');
+    
+    if (!panel || !header || !body || !input) {
+        console.error('[ai] Missing required DOM elements');
+        return;
+    }
+    
+    // ---- State ----
+    const STORAGE_KEY = 'workflow-ai-history';
+    const MODEL_STORAGE_KEY = 'workflow-ai-model';
+    let history = [];
+    let busy = false;
+    
+    try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) history = JSON.parse(saved) || [];
+    } catch (_) { history = []; }
+    
+    function saveHistory() {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(history.slice(-30))); } catch (_) {}
+    }
+    
+    // ---- Markdown ----
+    function renderMarkdown(text) {
+        let out = String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+
+        out = out.replace(/```action\n?([\s\S]*?)```/g, (m, code) => {
+            return '<pre class="ai-action-block" data-action="' + encodeURIComponent(code) + '">' + code + '</pre>';
+        });
+
+        out = out.replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => {
+            const cleanCode = code.replace(/^\n/, '').replace(/\n$/, '');
+            const encoded = encodeURIComponent(cleanCode);
+            const langLabel = lang || 'code';
+            return '<div class="ai-code-block" data-code="' + encoded + '">' +
+                   '<div class="ai-code-header">' +
+                     '<span class="ai-code-lang">' + langLabel + '</span>' +
+                     '<button class="ai-copy-btn" data-code="' + encoded + '" title="Copy to clipboard">' +
+                       '<span>Copy</span>' +
+                     '</button>' +
+                   '</div>' +
+                   '<pre class="ai-code-content">' + cleanCode + '</pre>' +
+                 '</div>';
+        });
+
+        out = out.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
+        const parts = out.split(/(<pre[\s\S]*?<\/pre>|<div class="ai-code-block"[\s\S]*?<\/div>)/);
+        for (let i = 0; i < parts.length; i++) {
+            if (!parts[i].startsWith('<pre') && !parts[i].startsWith('<div class="ai-code-block"')) {
+                parts[i] = parts[i].replace(/\n/g, '<br>');
+            }
+        }
+        out = parts.join('');
+
+        return out;
+    }
+    
+    function appendMessage(role, text) {
+        const el = document.createElement('div');
+        el.className = 'ai-msg ' + role;
+        el.innerHTML = role === 'bot' ? renderMarkdown(text) : String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        body.appendChild(el);
+        body.scrollTop = body.scrollHeight;
+    }
+    
+    function appendThinking() {
+        const el = document.createElement('div');
+        el.className = 'ai-thinking';
+        el.textContent = 'Thinking';
+        body.appendChild(el);
+        body.scrollTop = body.scrollHeight;
+        return el;
+    }
+    
+    function renderHistory() {
+        body.innerHTML = '';
+        if (history.length === 0) {
+            appendMessage('bot', "Hi! I'm your workflow assistant. Ask me anything.");
+        } else {
+            history.forEach(h => appendMessage(h.role, h.text));
+        }
+    }
+    
+    // ---- Send ----
+    async function sendMessage(text) {
+        text = String(text || '').trim();
+        if (!text || busy) return;
+        busy = true;
+        if (sendBtn) sendBtn.disabled = true;
+        
+        appendMessage('user', text);
+        history.push({ role: 'user', text });
+        const thinking = appendThinking();
+        
+        try {
+            const res = await fetch('http://localhost:5000/ai-chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: text,
+                    history: history.slice(-10),
+                    model: (modelSelector && modelSelector.value) || 'gemini-flash'
+                })
+            });
+            const data = await res.json();
+            thinking.remove();
+            
+            if (!res.ok || data.error) {
+                const errText = data.error || ('Server error ' + res.status);
+                appendMessage('bot', 'Warning: ' + errText);
+                history.push({ role: 'bot', text: 'Warning: ' + errText });
+            } else {
+                appendMessage('bot', data.reply || '(empty)');
+                history.push({ role: 'bot', text: data.reply || '(empty)' });
+            }
+            saveHistory();
+        } catch (err) {
+            thinking.remove();
+            appendMessage('bot', 'Network error: ' + err.message);
+        } finally {
+            busy = false;
+            if (sendBtn) sendBtn.disabled = false;
+            input.focus();
+        }
+    }
+    
+    // ---- Input handlers ----
+    function handleSendFromInput() {
+        const v = input.value.trim();
+        if (!v) return;
+        input.value = '';
+        input.style.height = 'auto';
+        sendMessage(v);
+    }
+    
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSendFromInput();
+        }
+    });
+    
+    input.addEventListener('input', () => {
+        input.style.height = 'auto';
+        input.style.height = Math.min(100, input.scrollHeight) + 'px';
+    });
+    
+    if (sendBtn) {
+        sendBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            handleSendFromInput();
+        });
+    }
+    
+    // ---- Toggle ----
+    function togglePanel(e) {
+        if (e) {
+            if (e.target && e.target.closest) {
+                if (e.target.closest('#aiClearBtn')) return;
+                if (e.target.closest('#aiModelSelector')) return;
+            }
+        }
+        if (modelSelector && document.activeElement === modelSelector) return;
+        panel.classList.toggle('collapsed');
+        const isCollapsed = panel.classList.contains('collapsed');
+        if (!isCollapsed) setTimeout(() => input.focus(), 100);
+    }
+    header.addEventListener('click', togglePanel);
+    
+    // ---- Clear ----
+    if (clearBtn) {
+        clearBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (!confirm('Clear the entire conversation?')) return;
+            history = [];
+            saveHistory();
+            renderHistory();
+        });
+    }
+    
+    // ---- Quick actions ----
+    quickBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (panel.classList.contains('collapsed')) {
+                panel.classList.remove('collapsed');
+            }
+            sendMessage(btn.dataset.prompt);
+        });
+    });
+    
+    // ---- Model selector ----
+    async function loadModels() {
+        if (!modelSelector) return;
+        try {
+            const res = await fetch('http://localhost:5000/ai-models');
+            const data = await res.json();
+            modelSelector.innerHTML = '';
+            data.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.key;
+                opt.textContent = m.label + (m.available ? '' : ' (not configured)');
+                opt.disabled = !m.available;
+                modelSelector.appendChild(opt);
+            });
+            const saved = localStorage.getItem(MODEL_STORAGE_KEY);
+            if (saved && Array.from(modelSelector.options).some(o => o.value === saved && !o.disabled)) {
+                modelSelector.value = saved;
+            } else {
+                const firstAvail = Array.from(modelSelector.options).find(o => !o.disabled);
+                if (firstAvail) modelSelector.value = firstAvail.value;
+            }
+            console.log('[models] Loaded', data.models.length, 'models');
+        } catch (e) {
+            console.warn('[models] Could not load:', e);
+        }
+    }
+    
+    if (modelSelector) {
+        modelSelector.addEventListener('change', () => {
+            localStorage.setItem(MODEL_STORAGE_KEY, modelSelector.value);
+        });
+        ['click', 'mousedown', 'mouseup'].forEach(evt => {
+            modelSelector.addEventListener(evt, (e) => e.stopPropagation());
+        });
+        loadModels();
+    }
+    
+
+    // ============ COPY BUTTON HANDLER ============
+    document.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.ai-copy-btn');
+        if (!btn) return;
+
+        const encoded = btn.dataset.code;
+        if (!encoded) return;
+
+        const code = decodeURIComponent(encoded);
+
+        try {
+            await navigator.clipboard.writeText(code);
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = '<span>Copied</span>';
+            btn.style.color = '#22c55e';
+            setTimeout(() => {
+                btn.innerHTML = originalHTML;
+                btn.style.color = '';
+            }, 1500);
+        } catch (err) {
+            const textarea = document.createElement('textarea');
+            textarea.value = code;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+                btn.innerHTML = '<span>Copied</span>';
+                btn.style.color = '#22c55e';
+                setTimeout(() => {
+                    btn.innerHTML = '<span>Copy</span>';
+                    btn.style.color = '';
+                }, 1500);
+            } catch (e2) {
+                alert('Copy failed. Select and copy manually.');
+            }
+            document.body.removeChild(textarea);
+        }
+    });
+    // ============ END COPY BUTTON HANDLER ============
+
+        // ---- Initial render ----
+    renderHistory();
+    console.log('[ai] AI panel ready');
+})();
+
+</script>
+</body>
+</html>

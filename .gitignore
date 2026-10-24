@@ -1,0 +1,192 @@
+# ══════════════════════════════════════════════════════════════
+# Python
+# ══════════════════════════════════════════════════════════════
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# ══════════════════════════════════════════════════════════════
+# Secrets & config — NEVER commit these
+# ══════════════════════════════════════════════════════════════
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+credentials.json
+credentials*.json
+secrets.json
+
+# ══════════════════════════════════════════════════════════════
+# Patch backups — created by patch scripts
+# ══════════════════════════════════════════════════════════════
+*.backup
+*.backup_*
+*.bak
+
+# ══════════════════════════════════════════════════════════════
+# Generated at runtime
+# ══════════════════════════════════════════════════════════════
+# Workflow files (if you want to ship some, remove this and
+# explicitly git add the ones you want to keep)
+workflows/*.json
+!workflows/.gitkeep
+
+# Generated audio / images from HTTP or Code nodes
+output_*.wav
+output_*.mp3
+output_*.png
+output_*.jpg
+output_*.jpeg
+voice_*.wav
+voice_*.mp3
+*.wav
+*.mp3
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Database / cache
+*.sqlite
+*.sqlite3
+*.db
+
+# ══════════════════════════════════════════════════════════════
+# OS junk
+# ══════════════════════════════════════════════════════════════
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ══════════════════════════════════════════════════════════════
+# Editor / IDE
+# ══════════════════════════════════════════════════════════════
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# ══════════════════════════════════════════════════════════════
+# Node (only if you ever add a build step)
+# ══════════════════════════════════════════════════════════════
+node_modules/
+npm-debug.log*
+yarn.lock
+package-lock.json
+
+# ══════════════════════════════════════════════════════════════
+# Vercel / deployment
+# ══════════════════════════════════════════════════════════════
+.vercel
+.vercelignore
+
+# ══════════════════════════════════════════════════════════════
+# Temp files
+# ══════════════════════════════════════════════════════════════
+*.tmp
+*.temp
+tmp/
+temp/
+
+
+
+# ─── Secrets ───────────────────────────────────────
+.env
+.env.*
+!.env.example
+credentials/
+credentials*.json
+*.key
+*.pem
+
+# ─── Backups ───────────────────────────────────────
+*.backup
+*.backup*
+*.bak
+*.bak-*
+*.bak2
+
+# ─── Runtime data ──────────────────────────────────
+execution_logs/
+memory/
+workflows/*.json
+!workflows/.gitkeep
+
+# ─── Generated media ───────────────────────────────
+*.png
+*.jpg
+*.jpeg
+*.wav
+*.mp3
+apod_*.png
+image_*.png
+voice_*.wav
+
+# ─── Python ────────────────────────────────────────
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# ─── Editors / OS ──────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+
+# ─── Stray copies ──────────────────────────────────
+* - Copy.*
+*Copy.html
+
+
+execution_logs/
