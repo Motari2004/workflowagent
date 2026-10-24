@@ -1,222 +1,208 @@
 # -*- coding: utf-8 -*-
 import os, shutil, sys, re
 
-HTML = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\public\index.html'
-if not os.path.exists(HTML):
-    print("FAIL: missing index.html"); sys.exit(1)
+SERVER = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\server.py'
+if not os.path.exists(SERVER):
+    print("FAIL: missing server.py"); sys.exit(1)
 
-shutil.copy(HTML, HTML + '.backup_v22')
+shutil.copy(SERVER, SERVER + '.backup_v23')
 print("Backed up\n")
 
-with open(HTML, 'r', encoding='utf-8') as f:
-    html = f.read()
+with open(SERVER, 'r', encoding='utf-8') as f:
+    server = f.read()
 
-# ============================================================
-# Replace the tool/integration case in buildPayload
-# ============================================================
-print("[1] Replacing buildPayload tool case...")
+# Find the current tool node shape section in the system prompt
+# This is inside ai_chat() — the big system = data.get('system') or (...)
+print("[1] Finding prompt section to replace...")
 
-# Match the entire case block regardless of current shape
-pattern = re.compile(
-    r"case 'tool/integration':\s*\{[\s\S]*?break;\s*\}",
-    re.DOTALL
+# Match the ZERNIO / social posting section
+old_section = re.search(
+    r'"### ZERNIO / INSTAGRAM / SOCIAL POSTING ###"[\s\S]*?(?="### NODE SCHEMAS ###")',
+    server
 )
 
-m = pattern.search(html)
-if not m:
-    print("FAIL: buildPayload tool case not found")
+if not old_section:
+    print("FAIL: could not find ZERNIO section in prompt")
+    print("Trying alternate pattern...")
+    # Try broader match
+    old_section = re.search(
+        r'### ZERNIO.*?(?=### NODE SCHEMAS)',
+        server,
+        re.DOTALL
+    )
+
+if not old_section:
+    print("FAIL: giving up on finding the section")
     sys.exit(1)
 
-old_block = m.group(0)
-print("  Found existing block ({} chars)".format(len(old_block)))
+print("  Found section ({} chars)".format(len(old_section.group(0))))
 
-new_block = '''case 'tool/integration': {
-                function stripTemplates(str) {
-                    if (typeof str !== 'string') return str;
-                    return str.replace(/\\$\\{[^}]*\\}/g, '').replace(/\\{\\{[^}]*\\}\\}/g, '').trim();
-                }
+# New section: much more prescriptive, with concrete few-shot examples
+new_section = '''"### ZERNIO / INSTAGRAM / SOCIAL POSTING ###"
+        "\\n\\n"
+        "Zernio is a valid tool that posts to: instagram, facebook, tiktok, "
+        "twitter, linkedin, threads, youtube, reddit, telegram, etc.\\n"
+        "NEVER say you don't have Zernio - you do.\\n"
+        "NEVER say you don't have Instagram - Zernio handles it.\\n\\n"
 
-                // Bulletproof media URL parser.
-                // Accepts:
-                //   - Bare URL: "https://a.com/x.jpg"
-                //   - Array: ["https://a.com/x.jpg"]
-                //   - JSON array string: '["https://a.com/x.jpg"]'
-                //   - Comma-separated: "https://a.com/x.jpg, https://b.com/y.jpg"
-                //   - Newline-separated
-                //   - Nested JSON array strings inside arrays
-                //   - Template syntax: "${...}" (stripped)
-                // Returns: array of clean, valid URLs.
-                function parseMediaUrls(raw) {
-                    var result = [];
-                    
-                    function pushUrl(u) {
-                        if (typeof u !== 'string') return;
-                        var s = stripTemplates(u);
-                        if (!s) return;
-                        // Must look like a URL
-                        if (s.startsWith('http://') || s.startsWith('https://')) {
-                            result.push(s);
-                        }
-                    }
-                    
-                    function walk(val, depth) {
-                        if (depth > 5) return;  // safety against deeply nested
-                        if (val === null || val === undefined) return;
-                        
-                        if (Array.isArray(val)) {
-                            for (var i = 0; i < val.length; i++) walk(val[i], depth + 1);
-                            return;
-                        }
-                        
-                        if (typeof val !== 'string') return;
-                        
-                        var s = stripTemplates(val);
-                        if (!s) return;
-                        
-                        // Try JSON parse if it looks like an array
-                        var trimmed = s.trim();
-                        if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-                            try {
-                                var parsed = JSON.parse(trimmed);
-                                walk(parsed, depth + 1);
-                                return;
-                            } catch (_) { /* fall through */ }
-                        }
-                        
-                        // Try JSON parse if it looks like a single JSON string "\"...\""
-                        if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length > 2) {
-                            try {
-                                var inner = JSON.parse(trimmed);
-                                walk(inner, depth + 1);
-                                return;
-                            } catch (_) { /* fall through */ }
-                        }
-                        
-                        // Comma or newline separated?
-                        if (trimmed.indexOf(',') !== -1 || trimmed.indexOf('\\n') !== -1) {
-                            var parts = trimmed.split(/[,\\n]+/);
-                            for (var j = 0; j < parts.length; j++) pushUrl(parts[j]);
-                            return;
-                        }
-                        
-                        // Bare URL
-                        pushUrl(trimmed);
-                    }
-                    
-                    walk(raw, 0);
-                    
-                    // Dedupe while preserving order
-                    var seen = {};
-                    var deduped = [];
-                    for (var k = 0; k < result.length; k++) {
-                        if (!seen[result[k]]) {
-                            seen[result[k]] = true;
-                            deduped.push(result[k]);
-                        }
-                    }
-                    return deduped;
-                }
+        "### THE EXACT TOOL NODE SHAPE YOU MUST PRODUCE ###\\n"
+        "\\n"
+        "When the platform is instagram, the tool/integration node is EXACTLY this:\\n"
+        "\\n"
+        "  {\\n"
+        "    \\"type\\": \\"tool/integration\\",\\n"
+        "    \\"data\\": {\\n"
+        "      \\"service\\": \\"zernio\\",\\n"
+        "      \\"platform\\": \\"instagram\\",\\n"
+        "      \\"message\\": \\"\\",\\n"
+        "      \\"media_urls\\": [\\"https://picsum.photos/id/237/1024/1024\\"]\\n"
+        "    }\\n"
+        "  }\\n"
+        "\\n"
+        "Copy this shape verbatim. Change only the media URL if needed.\\n\\n"
 
-                const mediaList = parseMediaUrls(d.media_urls);
-                const cleanMessage = stripTemplates(d.message || '');
-                // If message somehow ended up as a JSON array string, blank it
-                const messageFinal = (cleanMessage.startsWith('[') && cleanMessage.endsWith(']'))
-                    ? ''
-                    : cleanMessage;
+        "### WHY THESE EXACT VALUES ###\\n"
+        "\\n"
+        "- \\"message\\": \\"\\" — empty string. The tool node AUTO-INHERITS the previous "
+        "node's text output as the caption. Do not put a variable here. Do not put "
+        "a template. Do not put text. Just empty string.\\n"
+        "- \\"media_urls\\": [\\"...\\"] — array with one literal https URL. Instagram "
+        "requires an image. Do not put ${...} or {{...}} in this field. Do not "
+        "reference previous node output. The URL is a STATIC literal string.\\n"
+        "- \\"platform\\": \\"instagram\\" — plain string, lowercase.\\n"
+        "- \\"service\\": \\"zernio\\" — plain string, lowercase.\\n\\n"
 
-                payload.push({type:'tool', data:{
-                    service: d.service || 'http-custom',
-                    message: messageFinal,
-                    platform: d.platform || 'instagram',
-                    media_urls: mediaList
-                }});
-                break;
-            }'''
+        "### WRONG OUTPUT — DO NOT PRODUCE THESE ###\\n"
+        "\\n"
+        "WRONG #1 (template in message):\\n"
+        "  {\\"type\\": \\"tool/integration\\", \\"data\\": {\\"service\\": \\"zernio\\", \\"platform\\": \\"instagram\\", "
+        "\\"message\\": \\"${input.quote}\\", \\"media_urls\\": [\\"https://...\\"]}}\\n"
+        "  Why wrong: \\"${input.quote}\\" is a literal 15-character string. It is NOT "
+        "interpolated. Zernio receives the literal text ${input.quote} as the caption.\\n\\n"
 
-html = html.replace(old_block, new_block, 1)
-print("  OK: buildPayload tool case replaced with bulletproof parser")
+        "WRONG #2 (template in media_urls):\\n"
+        "  {\\"type\\": \\"tool/integration\\", \\"data\\": {\\"service\\": \\"zernio\\", \\"platform\\": \\"instagram\\", "
+        "\\"message\\": \\"\\", \\"media_urls\\": [\\"${input.image}\\"]}}\\n"
+        "  Why wrong: Zernio receives the literal text \\"${input.image}\\" as the image "
+        "URL. That is not a URL. Zernio returns 400 Invalid media URL.\\n\\n"
 
-# ============================================================
-# Also update NodeTool.onConfigure to auto-clean the widget on load
-# ============================================================
-print("\n[2] Adding auto-clean to NodeTool.onConfigure...")
+        "WRONG #3 (message has a variable):\\n"
+        "  {\\"type\\": \\"tool/integration\\", \\"data\\": {\\"service\\": \\"zernio\\", \\"platform\\": \\"instagram\\", "
+        "\\"message\\": \\"{{data.quote}}\\", \\"media_urls\\": [\\"https://...\\"]}}\\n"
+        "  Why wrong: no template engine exists. The literal text {{data.quote}} is "
+        "sent to Zernio as the caption.\\n\\n"
 
-old_oc = re.search(
-    r'NodeTool\.prototype\.onConfigure\s*=\s*function\(info\)\s*\{[\s\S]*?\n\};',
-    html
+        "WRONG #4 (media_urls is a string, not array):\\n"
+        "  {\\"type\\": \\"tool/integration\\", \\"data\\": {\\"service\\": \\"zernio\\", \\"platform\\": \\"instagram\\", "
+        "\\"message\\": \\"\\", \\"media_urls\\": \\"https://picsum.photos/id/237/1024\\"}}\\n"
+        "  Why wrong: media_urls MUST be an array of strings, not a single string.\\n\\n"
+
+        "WRONG #5 (media_urls has embedded quotes):\\n"
+        "  {\\"type\\": \\"tool/integration\\", \\"data\\": {\\"service\\": \\"zernio\\", \\"platform\\": \\"instagram\\", "
+        "\\"message\\": \\"\\", \\"media_urls\\": [\\"[\\\\\\"https://picsum.photos/id/237/1024\\\\\\"]\\"]}}\\n"
+        "  Why wrong: the media_urls element contains literal brackets and quotes. "
+        "Zernio sees \\"[\\\\\\"https://...\\\\\\"]\\" as the URL, which is not a valid URL.\\n\\n"
+
+        "### CORRECT EXAMPLE 1 (post a random quote) ###\\n"
+        "\\n"
+        "User: \\"post a random quote to instagram\\"\\n"
+        "You output (inside a ```json block):\\n"
+        "  [\\n"
+        "    {\\"type\\": \\"trigger/webhook\\", \\"data\\": {}},\\n"
+        "    {\\"type\\": \\"action/http\\", \\"data\\": {\\"url\\": \\"https://type.fit/api/quotes\\", \\"method\\": \\"GET\\"}},\\n"
+        "    {\\"type\\": \\"logic/code\\", \\"data\\": {\\"lang\\": \\"javascript\\", \\"code\\": \\"if (!data || !Array.isArray(data)) { output('[ERROR] No quotes'); } else { const r = data[Math.floor(Math.random() * data.length)]; output(r.text + ' — ' + r.author + ' #inspiration'); }\\"}},\\n"
+        "    {\\"type\\": \\"tool/integration\\", \\"data\\": {\\"service\\": \\"zernio\\", \\"platform\\": \\"instagram\\", \\"message\\": \\"\\", \\"media_urls\\": [\\"https://picsum.photos/id/237/1024/1024\\"]}}\\n"
+        "  ]\\n\\n"
+        "Notice in node 4:\\n"
+        "  - \\"message\\": \\"\\" is truly empty — no variable, no template\\n"
+        "  - \\"media_urls\\": [\\"https://picsum.photos/id/237/1024/1024\\"] is a literal array\\n"
+        "  - The Code node's output (the quote text) automatically flows to the tool node as the caption\\n\\n"
+
+        "### HOW THE RUNTIME WORKS (why templates do not exist) ###\\n"
+        "\\n"
+        "Each node in the workflow receives the previous node's output as a plain string. "
+        "The tool node either: (a) uses its own \\"message\\" field if non-empty, OR "
+        "(b) inherits the previous node's output if \\"message\\" is empty.\\n"
+        "There is NO template engine. ${...} and {{...}} are not evaluated. "
+        "They are passed as literal text to the tool. This breaks Zernio, which "
+        "expects valid text and valid URLs.\\n\\n"
+
+        "### THE RULE ###\\n"
+        "\\n"
+        "For EVERY tool/integration node you produce:\\n"
+        "  - \\"message\\" is either \\"\\" (empty) or a plain literal string with no {} or $\\n"
+        "  - \\"media_urls\\" is either omitted, or an array of literal https URLs\\n"
+        "  - NEVER write ${input.x}, ${data.x}, {{input.x}}, {{data.x}} in any field\\n"
+        "  - If you feel tempted to reference previous node output, use \\"message\\": \\"\\" "
+        "and let it inherit automatically\\n\\n"
+
+        '''
+
+server = server[:old_section.start()] + new_section + server[old_section.end():]
+print("  OK: ZERNIO section replaced with few-shot examples")
+
+# Also update the FREE IMAGE SOURCES section (which mentions deprecated unsplash)
+print("\n[2] Updating image sources section...")
+
+old_img = re.search(
+    r'"### FREE IMAGE SOURCES FOR INSTAGRAM ###"[\s\S]*?(?="### NODE SCHEMAS ###")',
+    server
 )
 
-if old_oc:
-    new_oc = '''NodeTool.prototype.onConfigure = function(info) {
-    // Clean any template syntax AND brackets that a saved workflow might contain
-    function clean(str) {
-        if (typeof str !== 'string') return str;
-        // Strip templates
-        var s = str.replace(/\\$\\{[^}]*\\}/g, '').replace(/\\{\\{[^}]*\\}\\}/g, '').trim();
-        // Unwrap JSON array string: ["https://..."] -> https://...
-        if (s.startsWith('[') && s.endsWith(']')) {
-            try {
-                var parsed = JSON.parse(s);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                    s = String(parsed[0]).trim();
-                } else {
-                    s = '';
-                }
-            } catch (_) {
-                // Not valid JSON — try naive strip
-                s = s.replace(/^\\[\\s*"?/, '').replace(/"?\\s*\\]$/, '').trim();
-            }
-        }
-        // Strip surrounding quotes
-        if (s.startsWith('"') && s.endsWith('"') && s.length > 2) {
-            s = s.slice(1, -1).trim();
-        }
-        return s;
-    }
-    
-    if (info && info.properties) {
-        if (typeof info.properties.service === "string") this.properties.service = info.properties.service;
-        if (typeof info.properties.message === "string") this.properties.message = clean(info.properties.message);
-        if (typeof info.properties.platform === "string") this.properties.platform = info.properties.platform;
-        if (typeof info.properties.media_urls === "string") this.properties.media_urls = clean(info.properties.media_urls);
-    }
-    
-    // Sync widgets from cleaned properties
-    if (this.widgets) {
-        for (var i = 0; i < this.widgets.length; i++) {
-            var w = this.widgets[i];
-            if (w.name === "Service") w.value = this.properties.service || "discord";
-            else if (w.name === "Message (opt)") w.value = this.properties.message || "";
-            else if (w.name === "Platform") w.value = this.properties.platform || "instagram";
-            else if (w.name === "Media URL (opt)") w.value = this.properties.media_urls || "";
-        }
-    }
-};'''
-    html = html.replace(old_oc.group(0), new_oc, 1)
-    print("  OK: onConfigure cleans brackets on load")
-else:
-    print("  SKIP: onConfigure not found")
+if old_img:
+    new_img = '''"### IMAGE URLS ###"
+        "\\n"
+        "USE ONLY THIS URL for Instagram media_urls:\\n"
+        "  https://picsum.photos/id/237/1024/1024\\n"
+        "\\n"
+        "Other working picsum IDs (replace 237):\\n"
+        "  1011, 1015, 1016, 1018, 1025, 1039, 1040, 1043, 1044, 1050\\n"
+        "\\n"
+        "Format examples (all valid, all literal, no templates):\\n"
+        "  [\\"https://picsum.photos/id/237/1024/1024\\"]\\n"
+        "  [\\"https://picsum.photos/id/1011/1024/1024\\"]\\n"
+        "\\n"
+        "DO NOT use:\\n"
+        "  https://source.unsplash.com/... (SHUT DOWN - returns HTML page)\\n"
+        "  https://picsum.photos/1024/1024 (redirects - sometimes fails)\\n"
+        "  https://placehold.it/... (404)\\n"
+        "  ${input.image} or {{image_url}} (not a URL, will break)\\n\\n"
 
-with open(HTML, 'w', encoding='utf-8') as f:
-    f.write(html)
+        '''
+    server = server[:old_img.start()] + new_img + server[old_img.end():]
+    print("  OK: image sources section updated")
+else:
+    print("  SKIP: image sources section not found")
+
+with open(SERVER, 'w', encoding='utf-8') as f:
+    f.write(server)
+
+try:
+    compile(open(SERVER, 'r', encoding='utf-8').read(), SERVER, 'exec')
+    print("\n  [OK  ] server.py compiles")
+except SyntaxError as e:
+    print("\n  [FAIL] line {}: {}".format(e.lineno, e.msg))
+    shutil.copy(SERVER + '.backup_v23', SERVER)
+    print("  Restored from backup")
+    sys.exit(1)
 
 # ============================================================
-# Verify
+# VERIFY
 # ============================================================
 print("\n" + "=" * 55)
 print("VERIFICATION")
 print("=" * 55)
 
-fh = open(HTML, 'r', encoding='utf-8').read()
+fs = open(SERVER, 'r', encoding='utf-8').read()
 
 checks = [
-    ("parseMediaUrls function present",  "function parseMediaUrls(raw)" in fh),
-    ("handles JSON array strings",       "JSON.parse(trimmed)" in fh),
-    ("handles comma separated",          "trimmed.split(/[,\\\\n]+/)" in fh or "trimmed.split(/[,\\n]+/)" in fh),
-    ("handles nested arrays",            "walk(parsed, depth + 1)" in fh),
-    ("dedupes results",                  "if (!seen[result[k]])" in fh),
-    ("onConfigure cleans brackets",      "Unwrap JSON array string" in fh),
-    ("filters to valid URLs only",       "s.startsWith('http://') || s.startsWith('https://')" in fh),
+    ("exact tool shape example",     "THE EXACT TOOL NODE SHAPE" in fs),
+    ("wrong examples present",       "WRONG OUTPUT — DO NOT PRODUCE" in fs),
+    ("correct example present",      "CORRECT EXAMPLE 1" in fs),
+    ("runtime explanation",          "NO template engine" in fs or "There is NO template engine" in fs),
+    ("message is truly empty note",  "truly empty — no variable" in fs),
+    ("image ID 237 mentioned",       "picsum.photos/id/237" in fs),
+    ("unsplash deprecated warned",   "SHUT DOWN - returns HTML" in fs),
 ]
 
 ok = True
@@ -230,13 +216,13 @@ if ok:
     print("PATCH COMPLETE")
     print("=" * 55)
     print("\nNext:")
-    print("  git add public/index.html")
-    print("  git commit -m 'buildPayload: bulletproof media URL parsing'")
+    print("  git add server.py")
+    print("  git commit -m 'Prompt: concrete few-shot examples for tool node format'")
     print("  git push origin main")
     print()
     print("Then:")
-    print("  1. Hard refresh browser (Ctrl+Shift+R)")
-    print("  2. Reload the workflow")
-    print("  3. Execute — should work even with brackets in the widget")
+    print("  taskkill /F /IM python.exe")
+    print("  python server.py")
+    print("  In browser: clear AI chat, then ask: 'post a random quote to instagram'")
 else:
-    print("Review FAIL lines. Backup: index.html.backup_v22")
+    print("Review FAIL lines. Backup: server.py.backup_v23")
