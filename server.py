@@ -1098,6 +1098,13 @@ def tool_zernio(creds, msg, extra):
         media_urls = [media_urls]
     media_urls = [u for u in media_urls if u and u.strip()]
 
+    # ===== DIAGNOSTIC =====
+    print("[zernio-diag] platform=" + str(platform))
+    print("[zernio-diag] media_urls RAW = " + repr(media_urls))
+    print("[zernio-diag] extra keys = " + str(list((extra or {}).keys())))
+    print("[zernio-diag] creds keys = " + str(list((creds or {}).keys())))
+    # ======================
+
     if platform == "instagram" and not media_urls:
         return "[ERROR] Zernio: Instagram requires at least one image or video URL (media_urls)"
 
@@ -1408,6 +1415,12 @@ def execute_workflow(nodes, extra_input=None):
                         raw_msg = ''
                     
                     msg = raw_msg or current_memory
+                    # ===== DIAGNOSTIC =====
+                    print("[dispatcher-diag] service=" + str(service))
+                    print("[dispatcher-diag] node_data keys = " + str(list(node_data.keys())))
+                    print("[dispatcher-diag] node_data.media_urls = " + repr(node_data.get('media_urls')))
+                    print("[dispatcher-diag] node_data.mediaUrls = " + repr(node_data.get('mediaUrls')))
+                    # ======================
                     tool_extra = {}
                     if node_data.get('extra'):
                         tool_extra.update(node_data['extra'])
