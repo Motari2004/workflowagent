@@ -1,139 +1,64 @@
-# -*- coding: utf-8 -*-
-import os, shutil, sys, re
+#!/usr/bin/env python3
+"""Fix the brace bug in syncWidgetsFromProperties."""
+import re, sys
+from pathlib import Path
 
-HTML = r'C:\Users\PC\Desktop\modular\workflow-pro-v3\public\index.html'
-if not os.path.exists(HTML):
-    print("FAIL: missing index.html"); sys.exit(1)
+INDEX = Path("public/index.html")
 
-shutil.copy(HTML, HTML + '.backup_v28')
-print("Backed up")
+CORRECTED = r'''function syncWidgetsFromProperties(gr) {
+    if (!gr || !gr._nodes) return;
+    gr._nodes.forEach(function(node) {
+        if (!node.widgets || !node.properties) return;
+        for (var i = 0; i < node.widgets.length; i++) {
+            var w = node.widgets[i];
+            if (!w || !w.name) continue;
+            var wName = w.name;
+            if (typeof node.properties[wName] === "string") {
+                w.value = node.properties[wName];
+                continue;
+            }
+            var snake = wName.toLowerCase().replace(/[^a-z0-9]/g, "_");
+            if (typeof node.properties[snake] === "string") {
+                w.value = node.properties[snake];
+                continue;
+            }
+            var simple = wName.toLowerCase().replace(/\s*\([^)]*\)/g, "").replace(/[^a-z0-9]/g, "_");
+            if (typeof node.properties[simple] === "string") {
+                w.value = node.properties[simple];
+            }
+        }
+        if (node.type === "tool/integration" && typeof node.updateVisibility === "function") {
+            node.updateVisibility();
+        }
+    });
+}'''
 
-with open(HTML, 'r', encoding='utf-8') as f:
-    html = f.read()
-
-# Find the tool/integration case in buildPayload
-old_case = re.search(
-    r"case 'tool/integration':\s*\{[\s\S]*?break;\s*\}",
-    html
+PATTERN = re.compile(
+    r"function\s+syncWidgetsFromProperties\s*\(gr\)\s*\{[\s\S]*?\n\}\s*\n(?=\s*//\s*=+\s*\n//\s*AI WORKFLOW LOADER)",
+    re.DOTALL,
 )
 
-if not old_case:
-    print("FAIL: buildPayload tool case not found")
-    sys.exit(1)
+def main():
+    if not INDEX.exists():
+        print(f"[!] Not found: {INDEX}", file=sys.stderr); return 1
+    html = INDEX.read_text(encoding="utf-8")
+    
+    # Idempotent check: if already fixed
+    if "Re-apply tool widget visibility after load (OUTSIDE the widget loop)" in html:
+        print("[=] Already fixed."); return 0
+    
+    new_html, n = PATTERN.subn(lambda m: CORRECTED + "\n", html, count=1)
+    if n == 0:
+        print("[!] Could not locate syncWidgetsFromProperties block.", file=sys.stderr); return 2
+    
+    backup = INDEX.with_suffix(".html.bak2")
+    if not backup.exists():
+        backup.write_text(html, encoding="utf-8")
+        print(f"[+] Backup: {backup}")
+    
+    INDEX.write_text(new_html, encoding="utf-8")
+    print(f"[✓] Fixed syncWidgetsFromProperties ({len(new_html)-len(html):+d} bytes)")
+    return 0
 
-new_case = '''case 'tool/integration': {
-                function stripTemplates(str) {
-                    if (typeof str !== 'string') return str;
-                    return str.replace(/\\$\\{[^}]*\\}/g, '').replace(/\\{\\{[^}]*\\}\\}/g, '').trim();
-                }
-
-                // Bulletproof media URL parser.
-                // SPECIAL CASE: if the value is exactly "FROM_PREVIOUS" (or the
-                // array ["FROM_PREVIOUS"]), pass it through untouched. The server
-                // resolves it against the previous node's JSON output.
-                function parseMediaUrls(raw) {
-                    // Detect FROM_PREVIOUS early
-                    if (raw === 'FROM_PREVIOUS') return ['FROM_PREVIOUS'];
-                    if (Array.isArray(raw) && raw.length === 1 && raw[0] === 'FROM_PREVIOUS') {
-                        return ['FROM_PREVIOUS'];
-                    }
-                    
-                    var result = [];
-
-                    function pushUrl(u) {
-                        if (typeof u !== 'string') return;
-                        var s = stripTemplates(u);
-                        if (!s) return;
-                        if (s.startsWith('http://') || s.startsWith('https://')) {
-                            result.push(s);
-                        }
-                    }
-
-                    function walk(val, depth) {
-                        if (depth > 5) return;
-                        if (val === null || val === undefined) return;
-                        if (val === 'FROM_PREVIOUS') {
-                            result.push('FROM_PREVIOUS');
-                            return;
-                        }
-                        if (Array.isArray(val)) {
-                            for (var i = 0; i < val.length; i++) walk(val[i], depth + 1);
-                            return;
-                        }
-                        if (typeof val !== 'string') return;
-                        var s = stripTemplates(val);
-                        if (!s) return;
-                        var trimmed = s.trim();
-                        if (trimmed === 'FROM_PREVIOUS') {
-                            result.push('FROM_PREVIOUS');
-                            return;
-                        }
-                        if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-                            try {
-                                var parsed = JSON.parse(trimmed);
-                                walk(parsed, depth + 1);
-                                return;
-                            } catch (_) {}
-                        }
-                        if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length > 2) {
-                            try {
-                                var inner = JSON.parse(trimmed);
-                                walk(inner, depth + 1);
-                                return;
-                            } catch (_) {}
-                        }
-                        if (trimmed.indexOf(',') !== -1 || trimmed.indexOf('\\n') !== -1) {
-                            var parts = trimmed.split(/[,\\n]+/);
-                            for (var j = 0; j < parts.length; j++) pushUrl(parts[j]);
-                            return;
-                        }
-                        pushUrl(trimmed);
-                    }
-                    walk(raw, 0);
-
-                    var seen = {};
-                    var deduped = [];
-                    for (var k = 0; k < result.length; k++) {
-                        if (!seen[result[k]]) {
-                            seen[result[k]] = true;
-                            deduped.push(result[k]);
-                        }
-                    }
-                    return deduped;
-                }
-
-                const mediaList = parseMediaUrls(d.media_urls);
-                const cleanMessage = stripTemplates(d.message || '');
-                const messageFinal = (cleanMessage.startsWith('[') && cleanMessage.endsWith(']'))
-                    ? ''
-                    : cleanMessage;
-
-                payload.push({type:'tool', data:{
-                    service: d.service || 'http-custom',
-                    message: messageFinal,
-                    platform: d.platform || 'instagram',
-                    media_urls: mediaList
-                }});
-                break;
-            }'''
-
-html = html.replace(old_case.group(0), new_case, 1)
-print("OK: buildPayload preserves FROM_PREVIOUS")
-
-with open(HTML, 'w', encoding='utf-8') as f:
-    f.write(html)
-
-fh = open(HTML, 'r', encoding='utf-8').read()
-if 'preserves FROM_PREVIOUS' in fh or "raw === 'FROM_PREVIOUS'" in fh:
-    print("\nPATCH COMPLETE")
-    print("Next:")
-    print("  git add public/index.html")
-    print("  git commit -m 'buildPayload: preserve FROM_PREVIOUS placeholder'")
-    print("  git push origin main")
-    print()
-    print("Then:")
-    print("  Hard refresh browser (Ctrl+Shift+R)")
-    print("  Reload workflow")
-    print("  Execute")
-else:
-    print("\nFAIL: patch did not apply")
+if __name__ == "__main__":
+    sys.exit(main())

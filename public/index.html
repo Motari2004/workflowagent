@@ -1925,57 +1925,117 @@ NodeJsonExtract.prototype.onConfigure = function(info) {
     }
 };
 
+
+
+
+
+
 function NodeTool() {
     this.properties = { service:"discord", message:"", platform:"instagram", media_urls:"" };
     this.addInput("in","string"); this.addOutput("out","string");
     const names = Object.keys(TOOLS);
-    this.addWidget("combo","Service","discord", v => this.properties.service = v, { values:names });
+    this.addWidget("combo","Service","discord", v => {
+        this.properties.service = String(v||"").toLowerCase();
+        this.updateVisibility();
+    }, { values:names });
     this.addWidget("text","Message (opt)","", v => this.properties.message = v);
-    this.platformWidget = this.addWidget("combo","Platform","instagram", v => this.properties.platform = v, {
+    this.addWidget("combo","Platform","instagram", v => this.properties.platform = v, {
         values: ["instagram","facebook","tiktok","twitter","linkedin","threads","pinterest","youtube","reddit","bluesky","telegram","snapchat","whatsapp","discord","slack"]
     });
-    this.mediaWidget = this.addWidget("text","Media URL (opt)","", v => this.properties.media_urls = v);
+    this.addWidget("text","Media URL (opt)","", v => this.properties.media_urls = v);
     this.title = "Tool";
     applyNodeTheme(this, NODE_THEME.tool);
+    this.updateVisibility();
 }
 LiteGraph.registerNodeType("tool/integration", NodeTool);
 
-// Sync widget values after load
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+NodeTool.prototype.updateVisibility = function() {
+    const svc = (this.properties.service || "").toLowerCase();
+    const showPosting = (svc === "zernio" || svc === "buffer");
+    if (!this.widgets) return;
+
+    // Locate existing Platform / Media widgets by name
+    let pIdx = -1, mIdx = -1;
+    for (let i = 0; i < this.widgets.length; i++) {
+        if (this.widgets[i].name === "Platform") pIdx = i;
+        if (this.widgets[i].name === "Media URL (opt)") mIdx = i;
+    }
+
+    if (!showPosting) {
+        // Remove widgets (highest index first to keep earlier indexes valid)
+        if (mIdx > -1) this.widgets.splice(mIdx, 1);
+        if (pIdx > -1) this.widgets.splice(pIdx, 1);
+    } else {
+        // Add widgets back in the correct position
+        const platformValues = ["instagram","facebook","tiktok","twitter","linkedin",
+            "threads","pinterest","youtube","reddit","bluesky","telegram","snapchat",
+            "whatsapp","discord","slack"];
+
+        if (pIdx === -1) {
+            this.addWidget("combo", "Platform", this.properties.platform || "instagram",
+                v => this.properties.platform = v,
+                { values: platformValues });
+        }
+        if (mIdx === -1) {
+            this.addWidget("text", "Media URL (opt)", this.properties.media_urls || "",
+                v => this.properties.media_urls = v);
+        }
+    }
+
+    if (this.setDirtyCanvas) this.setDirtyCanvas(true, true);
+    if (this.graph && this.graph.canvas) this.graph.canvas.setDirty(true, true);
+};
+
+
+
+
+
+
+
+
+
 NodeTool.prototype.onConfigure = function(info) {
-    // Clean any template syntax AND brackets that a saved workflow might contain
     function clean(str) {
         if (typeof str !== 'string') return str;
-        // Strip templates
         var s = str.replace(/\$\{[^}]*\}/g, '').replace(/\{\{[^}]*\}\}/g, '').trim();
-        // Unwrap JSON array string: ["https://..."] -> https://...
         if (s.startsWith('[') && s.endsWith(']')) {
             try {
                 var parsed = JSON.parse(s);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                    s = String(parsed[0]).trim();
-                } else {
-                    s = '';
-                }
+                if (Array.isArray(parsed) && parsed.length > 0) s = String(parsed[0]).trim();
+                else s = '';
             } catch (_) {
-                // Not valid JSON — try naive strip
                 s = s.replace(/^\[\s*"?/, '').replace(/"?\s*\]$/, '').trim();
             }
         }
-        // Strip surrounding quotes
-        if (s.startsWith('"') && s.endsWith('"') && s.length > 2) {
-            s = s.slice(1, -1).trim();
-        }
+        if (s.startsWith('"') && s.endsWith('"') && s.length > 2) s = s.slice(1, -1).trim();
         return s;
     }
-    
+
     if (info && info.properties) {
         if (typeof info.properties.service === "string") this.properties.service = info.properties.service;
         if (typeof info.properties.message === "string") this.properties.message = clean(info.properties.message);
         if (typeof info.properties.platform === "string") this.properties.platform = info.properties.platform;
         if (typeof info.properties.media_urls === "string") this.properties.media_urls = clean(info.properties.media_urls);
     }
-    
-    // Sync widgets from cleaned properties
+
     if (this.widgets) {
         for (var i = 0; i < this.widgets.length; i++) {
             var w = this.widgets[i];
@@ -1985,16 +2045,20 @@ NodeTool.prototype.onConfigure = function(info) {
             else if (w.name === "Media URL (opt)") w.value = this.properties.media_urls || "";
         }
     }
+
+    this.updateVisibility();
 };
 
 NodeTool.prototype.onWidgetChanged = function(name, value, widget) {
-    // Strip template syntax as soon as the user types or pastes
     function stripTemplates(str) {
         if (typeof str !== 'string') return str;
         return str.replace(/\$\{[^}]*\}/g, '').replace(/\{\{[^}]*\}\}/g, '').trim();
     }
-    
-    if (name === "Message (opt)") {
+
+    if (name === "Service") {
+        this.properties.service = String(value || "").toLowerCase();
+        this.updateVisibility();
+    } else if (name === "Message (opt)") {
         var cleaned = stripTemplates(value);
         if (cleaned !== value) {
             this.properties.message = cleaned;
@@ -2011,26 +2075,10 @@ NodeTool.prototype.onWidgetChanged = function(name, value, widget) {
             if (typeof toast === 'function') toast('Template syntax not supported - removed', 'warn', 2000);
         }
     }
-    // Call parent if exists
     if (LGraphNode.prototype.onWidgetChanged) {
         return LGraphNode.prototype.onWidgetChanged.apply(this, arguments);
     }
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 function NodeCode() {
@@ -2387,12 +2435,16 @@ function buildPayload() {
                     ? ''
                     : cleanMessage;
 
-                payload.push({type:'tool', data:{
-                    service: d.service || 'http-custom',
-                    message: messageFinal,
-                    platform: d.platform || 'instagram',
-                    media_urls: mediaList
-                }});
+                payload.push({type:'tool', data:(function(){
+                    const svc = (d.service || '').toLowerCase();
+                    const posting = (svc === 'zernio' || svc === 'buffer');
+                    return {
+                        service: d.service || 'http-custom',
+                        message: messageFinal,
+                        platform: posting ? (d.platform || 'instagram') : null,
+                        media_urls: posting ? mediaList : []
+                    };
+                })()});
                 break;
             }
             case 'action/http': payload.push({type:'http-request', data:{
@@ -3743,26 +3795,25 @@ function syncWidgetsFromProperties(gr) {
             var w = node.widgets[i];
             if (!w || !w.name) continue;
             var wName = w.name;
-            // Try direct property name
             if (typeof node.properties[wName] === "string") {
                 w.value = node.properties[wName];
                 continue;
             }
-            // Try snake_case variant
             var snake = wName.toLowerCase().replace(/[^a-z0-9]/g, "_");
             if (typeof node.properties[snake] === "string") {
                 w.value = node.properties[snake];
                 continue;
             }
-            // Handle "Message (opt)" -> "message"
             var simple = wName.toLowerCase().replace(/\s*\([^)]*\)/g, "").replace(/[^a-z0-9]/g, "_");
             if (typeof node.properties[simple] === "string") {
                 w.value = node.properties[simple];
             }
         }
+        if (node.type === "tool/integration" && typeof node.updateVisibility === "function") {
+            node.updateVisibility();
+        }
     });
 }
-
 // ============================================================
 // AI WORKFLOW LOADER
 // ============================================================
